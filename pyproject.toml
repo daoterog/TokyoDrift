@@ -61,7 +61,9 @@ cuda = [
 ]
 cpu = [
     "torch==2.9.0",
-    "pyg-lib",
+    # pyg-lib does not publish macOS wheels for the torch 2.9 CPU index.
+    # It is an optional PyG accelerator; keep it on supported CPU platforms.
+    "pyg-lib; sys_platform != 'darwin'",
     "torch-scatter",
     "torch-sparse",
     "torch-cluster",
@@ -105,8 +107,8 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 # PyG binaries: prebuilt only, one flat index per torch build. The cpu page
-# carries macOS arm64 wheels for all five packages (pyg-lib as
-# macosx_11_0_arm64, the other four as universal2).
+# carries macOS universal2 wheels for the four torch-* packages. pyg-lib has no
+# macOS wheel there and is therefore excluded from the cpu group on macOS.
 [[tool.uv.index]]
 name = "pyg-cu128"
 url = "https://data.pyg.org/whl/torch-2.9.0+cu128.html"

@@ -23,8 +23,9 @@ uv sync --no-group cuda --group cpu
 ```
 
 torch comes from PyPI here, which on macOS is already the CPU/MPS build. The
-PyG packages come from the `pyg-cpu` flat index, the only place their macOS
-arm64 wheels are published.
+four `torch-*` PyG extensions come from the `pyg-cpu` flat index. `pyg-lib` is
+omitted because no macOS wheel is published for torch 2.9; it is an optional
+PyG acceleration package.
 
 **Linux / Windows without a GPU** — same command:
 
