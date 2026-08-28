@@ -2,6 +2,11 @@
 
 Requires Python >=3.11,<3.13 and [uv](https://docs.astral.sh/uv/).
 
+The self-contained DW4/LJ13 unnormalized-drift experiment is documented in
+[`particle_systems/README.md`](particle_systems/README.md). It does not depend
+on the imported QM9 experiment; use its isolated setup instructions instead of
+the root environment instructions below.
+
 ## Install
 
 torch and the compiled PyG packages (`pyg-lib`, `torch-scatter`, `torch-sparse`,
