@@ -36,6 +36,19 @@ Note that on Linux x86_64 this is not a slim install: PyPI's torch wheel pulls
 the `nvidia-*` CUDA runtime packages regardless. The group avoids the cu128
 index, not the CUDA dependencies.
 
+### torch-linear-assignment
+
+This is the one package with no wheels: it compiles a torch C++/CUDA extension
+from source. Its own build requirement is an unpinned `torch>=1.12.0`, so an
+isolated build would pull the latest PyPI torch and compile against the wrong
+CUDA version. `no-build-isolation-package` in `pyproject.toml` makes it build
+against the torch installed here instead. No extra flags are needed — a plain
+`uv sync` handles it, and the build takes about 90 seconds.
+
+Building the CUDA extension needs a working `nvcc` whose version matches the
+torch build (12.8 for the `cuda` group). To skip CUDA and build the CPU kernel
+instead, set `TLA_BUILD_CUDA=0`.
+
 ## Notes
 
 - Which group you get cannot be decided inside `pyproject.toml` — a lockfile is
