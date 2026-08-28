@@ -79,6 +79,14 @@ required-environments = [
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
+# torch-linear-assignment has no wheels and compiles a torch C++/CUDA extension.
+# Its build-system requires are ["setuptools", "torch>=1.12.0"] -- torch is
+# unpinned, so an isolated build pulls the latest PyPI torch (CUDA 13.0) and the
+# extension then fails against a 12.8 toolchain. Building without isolation makes
+# it compile against the torch actually installed here (2.9.0+cu128), and lets it
+# see ninja and numpy, which is why those are in the dependency list.
+no-build-isolation-package = ["torch-linear-assignment"]
+
 # Do not let uv try to build these from source if a wheel is missing: the source
 # builds need a full toolchain and take a very long time.
 no-build-package = [
