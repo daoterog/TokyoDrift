@@ -1,7 +1,7 @@
 {
   "system": "lj13",
   "data": "particle_systems/data/lj13.npz",
-  "output": "particle_systems/runs/lj13",
+  "output": "particle_systems/artifacts/runs/lj13/gaussian",
   "seed": 42,
   "model": {
     "feature_dim": 8,
@@ -16,8 +16,13 @@
     "positive_references": 256,
     "coordinate_noise_scale": 1.0,
     "bandwidth": "auto",
+    "bandwidth_scale_start": 1.5,
+    "bandwidth_scale_end": 0.5,
+    "bandwidth_anneal_start": 30000,
+    "bandwidth_anneal_end": 100000,
     "eta": 0.2,
-    "repulsion": 0.3,
+    "repulsion": 1.0,
+    "min_radius_fraction": 0.25,
     "learning_rate": 0.0002,
     "weight_decay": 0.0001,
     "gradient_clip": 1.0,
