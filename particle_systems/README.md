@@ -11,13 +11,12 @@ particle_systems/
 ├── configs/          # tracked, grouped by system
 ├── data/             # local datasets; ignored by Git
 ├── artifacts/        # checkpoints and evaluations; ignored by Git
-├── notebooks/        # tracked diagnostic notebooks
 ├── scripts/          # platform setup helpers
 ├── tests/            # unit tests
 └── *.py              # training, evaluation, model, drift, and system modules
 ```
 
-`configs/dw4/gaussian.json` and `configs/lj13/gaussian.json` are the baseline configurations. Files named `*_ablation.json` are retained experiments, not defaults.
+`configs/dw4/gaussian.json` and `configs/lj13/gaussian.json` are the baseline configurations.
 
 ## Setup and data
 
@@ -35,13 +34,6 @@ uv run --project particle_systems --no-sync python -m particle_systems.train \
   --config particle_systems/configs/dw4/gaussian.json
 ```
 
-The regularized-whitening Gaussian experiment is:
-
-```bash
-uv run --project particle_systems --no-sync python -m particle_systems.train \
-  --config particle_systems/configs/dw4/gaussian_whitened.json
-```
-
 Every run must use its own `artifacts/runs/...` directory. Do not run or resume two processes against the same directory.
 
 ## Evaluate
@@ -53,9 +45,14 @@ uv run --project particle_systems --no-sync python -m particle_systems.evaluate 
   --num-samples 500000
 ```
 
-## Diagnostics
+## GMM-40 benchmark
 
-[notebooks/clean_drift_audit.ipynb](notebooks/clean_drift_audit.ipynb) checks the drift/MMD scaling, visualizes Gaussian support failure on tails, and compares particle flow with a one-shot generator.
+```bash
+uv run --project particle_systems --no-sync python -m particle_systems.gmm40 \
+  --output particle_systems/artifacts/runs/gmm40/gaussian
+```
+
+This exact 2D target reports per-mode mass error, mode coverage, and sliced Wasserstein-2. It is a fast multimodal complement to the equivariant particle-system benchmarks.
 
 ## Test
 

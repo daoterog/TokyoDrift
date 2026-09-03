@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import torch
 
 from particle_systems.io import device_summary, select_device
-from particle_systems.summarize import expand_metric_paths
 
 
 class DeviceSelectionTests(unittest.TestCase):
@@ -33,20 +30,6 @@ class DeviceSelectionTests(unittest.TestCase):
         summary = device_summary(torch.device("cpu"))
         self.assertEqual(summary["device"], "cpu")
         self.assertEqual(summary["device_name"], "CPU")
-
-
-class PathExpansionTests(unittest.TestCase):
-    def test_wildcards_expand_without_shell_support(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            first = root / "seed42.json"
-            second = root / "seed43.json"
-            first.touch()
-            second.touch()
-            self.assertEqual(
-                expand_metric_paths([str(root / "seed*.json")]),
-                [first, second],
-            )
 
 
 if __name__ == "__main__":
