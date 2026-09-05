@@ -7,6 +7,7 @@ import copy
 import json
 import math
 import random
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,48 @@ from .drift import UnnormalizedDrift, descriptor_whitening, median_bandwidth
 from .io import build_model, device_summary, load_config, load_dataset, select_device
 from .systems import get_system
 from .validation import ValidationEvaluator
+
+
+@dataclass
+class EnergyStratifiedReferenceSampler:
+    """Unbiased, low-variance target-reference sampling across energy strata."""
+
+    samples: torch.Tensor
+    bin_indices: list[torch.Tensor]
+    bin_masses: torch.Tensor
+    boundaries: torch.Tensor
+
+    @classmethod
+    def build(
+        cls, samples: torch.Tensor, system, quantiles: list[float]
+    ) -> "EnergyStratifiedReferenceSampler":
+        if not quantiles or any(not 0.0 < value < 1.0 for value in quantiles):
+            raise ValueError("stratification quantiles must lie strictly between zero and one")
+        if quantiles != sorted(set(quantiles)):
+            raise ValueError("stratification quantiles must be strictly increasing")
+        energies = system.energy(samples)
+        boundaries = torch.quantile(energies, torch.tensor(quantiles, dtype=energies.dtype))
+        labels = torch.bucketize(energies, boundaries, right=True)
+        indices = [torch.where(labels == bin_index)[0] for bin_index in range(len(quantiles) + 1)]
+        if any(len(value) == 0 for value in indices):
+            raise ValueError("energy stratification produced an empty bin")
+        masses = torch.tensor([len(value) / len(samples) for value in indices], dtype=samples.dtype)
+        return cls(samples=samples, bin_indices=indices, bin_masses=masses, boundaries=boundaries)
+
+    def sample(self, count: int, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+        if count < len(self.bin_indices):
+            raise ValueError("positive reference count must be at least the number of strata")
+        counts = torch.full((len(self.bin_indices),), count // len(self.bin_indices), dtype=torch.long)
+        counts[: count % len(self.bin_indices)] += 1
+        selected: list[torch.Tensor] = []
+        weights: list[torch.Tensor] = []
+        for indices, mass, bin_count in zip(self.bin_indices, self.bin_masses, counts, strict=True):
+            choice = indices[torch.randint(len(indices), (int(bin_count),), generator=generator)]
+            selected.append(choice)
+            weights.append(
+                torch.full((int(bin_count),), float(mass / bin_count), dtype=self.samples.dtype)
+            )
+        return self.samples[torch.cat(selected)], torch.cat(weights)
 
 
 def bandwidth_scale(training: dict, step: int) -> float:
@@ -62,6 +105,32 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--steps", type=int, default=None, help="Override config steps.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override config batch size.")
+    parser.add_argument(
+        "--positive-references",
+        type=int,
+        default=None,
+        help="Override the number of target samples used in the attractive field estimate.",
+    )
+    parser.add_argument(
+        "--positive-reference-sampling",
+        choices=("iid", "energy-stratified"),
+        default=None,
+        help="Sample target references i.i.d. or from energy strata with unbiased weights.",
+    )
+    parser.add_argument(
+        "--positive-reference-energy-quantiles",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Strictly increasing energy quantiles defining stratification boundaries.",
+    )
+    parser.add_argument(
+        "--energy-feature-scale",
+        type=float,
+        default=None,
+        help="Append standardized potential energy to the invariant kernel descriptor.",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Override config seed.")
     parser.add_argument("--output", type=Path, default=None, help="Override output directory.")
     parser.add_argument("--resume", type=Path, default=None, help="Resume a training checkpoint.")
@@ -109,6 +178,16 @@ def main() -> None:
     config = load_config(args.config)
     if args.steps is not None:
         config["training"]["steps"] = args.steps
+    if args.batch_size is not None:
+        config["training"]["batch_size"] = args.batch_size
+    if args.positive_references is not None:
+        config["training"]["positive_references"] = args.positive_references
+    if args.positive_reference_sampling is not None:
+        config["training"]["positive_reference_sampling"] = args.positive_reference_sampling
+    if args.positive_reference_energy_quantiles is not None:
+        config["training"]["positive_reference_energy_quantiles"] = args.positive_reference_energy_quantiles
+    if args.energy_feature_scale is not None:
+        config["training"]["energy_feature_scale"] = args.energy_feature_scale
     if args.seed is not None:
         config["seed"] = args.seed
     if args.output is not None:
@@ -173,12 +252,25 @@ def main() -> None:
         )
     else:
         raise ValueError("descriptor_preconditioning must be 'none' or 'whitened'")
+    energy_feature_scale = float(training.get("energy_feature_scale", 0.0))
+    if energy_feature_scale and preconditioning != "none":
+        raise ValueError("energy augmentation cannot currently be combined with descriptor whitening")
+    energy_mean = None
+    energy_standard_deviation = None
+    if energy_feature_scale:
+        train_energy = system.energy(train_data)
+        energy_mean = train_energy.mean()
+        energy_standard_deviation = train_energy.std().clamp_min(1e-6)
     bandwidth_config = training["bandwidth"]
     base_bandwidth = (
         median_bandwidth(
             train_data,
             descriptor_mean=descriptor_mean,
             descriptor_whitener=descriptor_whitener,
+            energy_function=system.energy,
+            energy_mean=energy_mean,
+            energy_standard_deviation=energy_standard_deviation,
+            energy_feature_scale=energy_feature_scale,
         )
         if bandwidth_config == "auto"
         else float(bandwidth_config)
@@ -198,9 +290,22 @@ def main() -> None:
         broad_weight=float(training.get("broad_kernel_weight", 0.0)),
         minimum_bandwidth=training.get("minimum_distance_bandwidth"),
         minimum_weight=float(training.get("minimum_distance_kernel_weight", 0.0)),
+        energy_function=system.energy,
+        energy_mean=energy_mean,
+        energy_standard_deviation=energy_standard_deviation,
+        energy_feature_scale=energy_feature_scale,
     ).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
+    reference_sampling = str(training.get("positive_reference_sampling", "iid"))
+    quantiles = list(training.get("positive_reference_energy_quantiles", (0.5, 0.9, 0.99)))
+    stratified_references = (
+        EnergyStratifiedReferenceSampler.build(train_data, system, quantiles)
+        if reference_sampling == "energy-stratified"
+        else None
+    )
+    if reference_sampling not in {"iid", "energy-stratified"}:
+        raise ValueError("positive_reference_sampling must be 'iid' or 'energy-stratified'")
     outdir = Path(config["output"])
     outdir.mkdir(parents=True, exist_ok=True)
     with (outdir / "resolved_config.json").open("w") as stream:
@@ -213,6 +318,25 @@ def main() -> None:
                 "broad_bandwidth": broad_bandwidth or None,
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,
+                "energy_feature": {
+                    "scale": energy_feature_scale,
+                    "mean": float(energy_mean) if energy_mean is not None else None,
+                    "standard_deviation": (
+                        float(energy_standard_deviation)
+                        if energy_standard_deviation is not None
+                        else None
+                    ),
+                },
+                "positive_reference_sampler": (
+                    {
+                        "type": "energy-stratified",
+                        "energy_quantiles": quantiles,
+                        "energy_boundaries": stratified_references.boundaries.tolist(),
+                        "bin_masses": stratified_references.bin_masses.tolist(),
+                    }
+                    if stratified_references is not None
+                    else {"type": "iid"}
+                ),
             },
             stream,
             indent=2,
@@ -260,8 +384,14 @@ def main() -> None:
         current_scale = bandwidth_scale(training, step)
         current_bandwidth = base_bandwidth * current_scale
         drift.bandwidth = current_bandwidth
-        reference_indices = torch.randint(len(train_data), (references,), generator=generator)
-        positive = train_data[reference_indices].to(device)
+        if stratified_references is None:
+            reference_indices = torch.randint(len(train_data), (references,), generator=generator)
+            positive = train_data[reference_indices].to(device)
+            positive_weights = None
+        else:
+            positive, positive_weights = stratified_references.sample(references, generator)
+            positive = positive.to(device)
+            positive_weights = positive_weights.to(device)
         coordinate_noise = coordinate_scale * torch.randn(
             batch_size, system.particles, system.dimensions, device=device
         )
@@ -280,6 +410,7 @@ def main() -> None:
             generated.detach(),
             torch.arange(batch_size, device=device),
             repulsion,
+            positive_weights,
         )
         target = (generated.detach() + eta * field).detach()
         loss = (generated - target).square().mean()

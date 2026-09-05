@@ -1,0 +1,33 @@
+{
+  "system": "dw4",
+  "data": "particle_systems/data/dw4.npz",
+  "output": "particle_systems/artifacts/runs/dw4/gaussian-xlarge",
+  "seed": 42,
+  "model": {
+    "feature_dim": 8,
+    "hidden_dim": 192,
+    "layers": 8,
+    "radial_basis": 32,
+    "max_distance": 8.0
+  },
+  "training": {
+    "steps": 50000,
+    "batch_size": 2048,
+    "positive_references": 2048,
+    "coordinate_noise_scale": 2.5,
+    "bandwidth": "auto",
+    "bandwidth_scale_start": 1.5,
+    "bandwidth_scale_end": 0.5,
+    "bandwidth_anneal_start": 10000,
+    "bandwidth_anneal_end": 30000,
+    "eta": 0.2,
+    "repulsion": 1.0,
+    "min_radius_fraction": 0.25,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "ema_decay": 0.999,
+    "log_every": 100,
+    "checkpoint_every": 1000
+  }
+}

@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 from torch import nn
 
 from .systems import center, pair_distances
 
 
-def invariant_descriptor(positions: torch.Tensor) -> torch.Tensor:
-    """Return sorted pair distances, invariant to rigid motion and relabeling."""
-    return pair_distances(positions).sort(dim=-1).values
+def invariant_descriptor(
+    positions: torch.Tensor,
+    energy_function: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    energy_mean: torch.Tensor | None = None,
+    energy_standard_deviation: torch.Tensor | None = None,
+    energy_feature_scale: float = 0.0,
+) -> torch.Tensor:
+    """Return invariant pair distances, optionally augmented by standardized energy."""
+    descriptor = pair_distances(positions).sort(dim=-1).values
+    if energy_feature_scale == 0.0:
+        return descriptor
+    if energy_function is None or energy_mean is None or energy_standard_deviation is None:
+        raise ValueError("energy augmentation requires an energy function, mean, and standard deviation")
+    energy = energy_function(positions).unsqueeze(-1)
+    standardized_energy = (energy - energy_mean) / energy_standard_deviation
+    return torch.cat((descriptor, energy_feature_scale * standardized_energy), dim=-1)
 
 
 def descriptor_whitening(
@@ -58,6 +73,10 @@ class UnnormalizedDrift(nn.Module):
         broad_weight: float = 0.0,
         minimum_bandwidth: float | None = None,
         minimum_weight: float = 0.0,
+        energy_function: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        energy_mean: torch.Tensor | None = None,
+        energy_standard_deviation: torch.Tensor | None = None,
+        energy_feature_scale: float = 0.0,
     ) -> None:
         """Initialize the Gaussian kernel with a positive bandwidth."""
         super().__init__()
@@ -75,6 +94,12 @@ class UnnormalizedDrift(nn.Module):
             raise ValueError("broad bandwidth must be positive when its weight is nonzero")
         if minimum_weight and (minimum_bandwidth is None or minimum_bandwidth <= 0):
             raise ValueError("minimum bandwidth must be positive when its weight is nonzero")
+        if energy_feature_scale < 0:
+            raise ValueError("energy feature scale must be non-negative")
+        if energy_feature_scale and (
+            energy_function is None or energy_mean is None or energy_standard_deviation is None
+        ):
+            raise ValueError("energy augmentation requires an energy function, mean, and standard deviation")
         self.bandwidth = float(bandwidth)
         self.kernel = kernel
         self.imq_beta = float(imq_beta)
@@ -84,6 +109,10 @@ class UnnormalizedDrift(nn.Module):
         self.broad_weight = float(broad_weight)
         self.minimum_bandwidth = minimum_bandwidth
         self.minimum_weight = float(minimum_weight)
+        self.energy_function = energy_function
+        self.energy_feature_scale = float(energy_feature_scale)
+        self.register_buffer("energy_mean", energy_mean)
+        self.register_buffer("energy_standard_deviation", energy_standard_deviation)
 
     def _kernel(self, squared_error: torch.Tensor, bandwidth: float) -> torch.Tensor:
         """Evaluate the selected positive-definite radial kernel."""
@@ -93,7 +122,13 @@ class UnnormalizedDrift(nn.Module):
 
     def _descriptor(self, positions: torch.Tensor) -> torch.Tensor:
         """Return raw or fixed-whitened invariant descriptors."""
-        descriptor = invariant_descriptor(positions)
+        descriptor = invariant_descriptor(
+            positions,
+            energy_function=self.energy_function,
+            energy_mean=self.energy_mean,
+            energy_standard_deviation=self.energy_standard_deviation,
+            energy_feature_scale=self.energy_feature_scale,
+        )
         if self.descriptor_mean is None:
             return descriptor
         return (descriptor - self.descriptor_mean) @ self.descriptor_whitener.T
@@ -103,9 +138,17 @@ class UnnormalizedDrift(nn.Module):
         query: torch.Tensor,
         references: torch.Tensor,
         self_indices: torch.Tensor | None = None,
+        reference_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         if references.shape[0] == 0:
             raise ValueError("at least one reference is required")
+        if reference_weights is not None:
+            if reference_weights.ndim != 1 or len(reference_weights) != len(references):
+                raise ValueError("reference weights must have one entry per reference")
+            if torch.any(reference_weights < 0) or not torch.isclose(
+                reference_weights.sum(), torch.tensor(1.0, device=reference_weights.device)
+            ):
+                raise ValueError("reference weights must be non-negative and sum to one")
 
         # Build a small local graph to pull the invariant density gradient
         # back to Cartesian coordinates. It is detached before returning.
@@ -142,17 +185,22 @@ class UnnormalizedDrift(nn.Module):
                 if minimum_kernel is not None:
                     minimum_kernel = minimum_kernel * keep
 
-            density = descriptor_size * kernel.mean(dim=1)
+            def average(values: torch.Tensor) -> torch.Tensor:
+                if reference_weights is None:
+                    return values.mean(dim=1)
+                return (values * reference_weights.detach().unsqueeze(0)).sum(dim=1)
+
+            density = descriptor_size * average(kernel)
             if broad_kernel is not None:
-                density = density + self.broad_weight * descriptor_size * broad_kernel.mean(dim=1)
+                density = density + self.broad_weight * descriptor_size * average(broad_kernel)
             if minimum_kernel is not None:
-                density = density + self.minimum_weight * minimum_kernel.mean(dim=1)
+                density = density + self.minimum_weight * average(minimum_kernel)
             (field,) = torch.autograd.grad(density.sum(), differentiable_query)
-        masses = {"kernel_mass": kernel.mean(dim=1).detach()}
+        masses = {"kernel_mass": average(kernel).detach()}
         if broad_kernel is not None:
-            masses["broad_kernel_mass"] = broad_kernel.mean(dim=1).detach()
+            masses["broad_kernel_mass"] = average(broad_kernel).detach()
         if minimum_kernel is not None:
-            masses["minimum_kernel_mass"] = minimum_kernel.mean(dim=1).detach()
+            masses["minimum_kernel_mass"] = average(minimum_kernel).detach()
         return field.detach(), masses
 
     def forward(
@@ -162,9 +210,12 @@ class UnnormalizedDrift(nn.Module):
         negative_references: torch.Tensor | None = None,
         self_indices: torch.Tensor | None = None,
         repulsion: float = 1.0,
+        positive_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return attraction minus self-repulsion and useful diagnostics."""
-        positive, positive_masses = self._field(generated, positive_references)
+        positive, positive_masses = self._field(
+            generated, positive_references, reference_weights=positive_weights
+        )
         if negative_references is None:
             negative_references = generated
         if self_indices is None:
@@ -190,6 +241,10 @@ def median_bandwidth(
     max_samples: int = 1024,
     descriptor_mean: torch.Tensor | None = None,
     descriptor_whitener: torch.Tensor | None = None,
+    energy_function: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    energy_mean: torch.Tensor | None = None,
+    energy_standard_deviation: torch.Tensor | None = None,
+    energy_feature_scale: float = 0.0,
 ) -> float:
     """Median RMS distance between invariant descriptors."""
     samples = samples[:max_samples]
@@ -197,7 +252,13 @@ def median_bandwidth(
         raise ValueError("at least two samples are required to estimate bandwidth")
     if (descriptor_mean is None) != (descriptor_whitener is None):
         raise ValueError("descriptor mean and whitener must be provided together")
-    descriptors = invariant_descriptor(samples)
+    descriptors = invariant_descriptor(
+        samples,
+        energy_function=energy_function,
+        energy_mean=energy_mean,
+        energy_standard_deviation=energy_standard_deviation,
+        energy_feature_scale=energy_feature_scale,
+    )
     if descriptor_mean is not None:
         descriptors = (descriptors - descriptor_mean) @ descriptor_whitener.T
     distance2 = torch.pdist(descriptors).square() / descriptors.shape[-1]

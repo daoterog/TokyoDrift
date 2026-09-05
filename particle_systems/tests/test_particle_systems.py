@@ -5,9 +5,11 @@ import unittest
 import torch
 
 from particle_systems.drift import UnnormalizedDrift, descriptor_whitening, invariant_descriptor
+from particle_systems.evaluate import valid_sample_observables, validity_metrics
 from particle_systems.model import ParticleGenerator
-from particle_systems.systems import center, dw4_energy, lj_energy
-from particle_systems.train import bandwidth_scale, learning_rate
+from particle_systems.systems import center, dw4_energy, get_system, lj_energy
+from particle_systems.toys.gmm40 import GMM40, metrics
+from particle_systems.train import EnergyStratifiedReferenceSampler, bandwidth_scale, learning_rate
 
 
 class PotentialTests(unittest.TestCase):
@@ -19,6 +21,62 @@ class PotentialTests(unittest.TestCase):
         positions = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
         self.assertTrue(torch.allclose(lj_energy(positions), torch.tensor([-1.0])))
 
+    def test_dw4_validity_is_a_broad_threshold_not_a_distribution_distance(self) -> None:
+        samples = torch.tensor(
+            [
+                [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]],
+                [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]],
+            ]
+        )
+        report = validity_metrics(samples, samples, "dw4", energy_quantile=0.99, minimum_pair_distance=0.5)
+        self.assertEqual(report["generated"]["valid_fraction"], 1.0)
+        self.assertEqual(report["reference"]["valid_fraction"], 1.0)
+        observables = valid_sample_observables(
+            samples, samples, "dw4", energy_quantile=0.99, minimum_pair_distance=0.5
+        )
+        self.assertEqual(observables["generated_retained_fraction"], 1.0)
+        self.assertEqual(observables["energy_wasserstein_1"], 0.0)
+
+
+class GMMTests(unittest.TestCase):
+    def test_imbalanced_gmm_has_the_intended_long_tail(self) -> None:
+        target = GMM40(torch.device("cpu"), distribution="imbalanced")
+        self.assertTrue(torch.isclose(target.weights.sum(), torch.tensor(1.0)))
+        self.assertEqual(int((target.tiers == 0).sum()), 8)
+        self.assertEqual(int((target.tiers == 1).sum()), 12)
+        self.assertEqual(int((target.tiers == 2).sum()), 20)
+        self.assertAlmostEqual(float(target.weights[target.tiers == 2].sum()), 0.12)
+
+    def test_validity_metric_accepts_exact_mode_centers(self) -> None:
+        target = GMM40(torch.device("cpu"), distribution="imbalanced")
+        report = metrics(target, target.centers, target.centers)
+        self.assertEqual(report["validity_rate"], 1.0)
+        self.assertEqual(report["valid_mode_coverage"], 0.0)  # requires 10 valid samples/mode
+
+
+class ReferenceSamplingTests(unittest.TestCase):
+    def test_stratified_sampler_returns_unbiased_normalized_weights(self) -> None:
+        torch.manual_seed(13)
+        samples = center(torch.randn(40, 4, 2))
+        sampler = EnergyStratifiedReferenceSampler.build(samples, get_system("dw4"), [0.5, 0.9])
+        references, weights = sampler.sample(12, torch.Generator().manual_seed(9))
+        self.assertEqual(len(references), 12)
+        self.assertTrue(torch.isclose(weights.sum(), torch.tensor(1.0)))
+        self.assertTrue(torch.all(weights > 0))
+
+    def test_uniform_positive_weights_match_the_empirical_mean_field(self) -> None:
+        query = center(torch.randn(2, 4, 2))
+        references = center(torch.randn(5, 4, 2))
+        drift = UnnormalizedDrift(1.0)
+        ordinary, _ = drift(query, references, repulsion=0.0)
+        weighted, _ = drift(
+            query,
+            references,
+            repulsion=0.0,
+            positive_weights=torch.full((5,), 0.2),
+        )
+        self.assertTrue(torch.allclose(ordinary, weighted, atol=1e-6, rtol=1e-6))
+
 
 class DriftTests(unittest.TestCase):
     def test_descriptor_is_invariant_to_rigid_motion_and_permutation(self) -> None:
@@ -29,6 +87,31 @@ class DriftTests(unittest.TestCase):
         self.assertTrue(
             torch.allclose(
                 invariant_descriptor(positions), invariant_descriptor(transformed), atol=1e-6
+            )
+        )
+
+    def test_energy_augmented_descriptor_is_invariant_to_rigid_motion_and_permutation(self) -> None:
+        positions = center(torch.randn(3, 4, 2))
+        permutation = torch.tensor([2, 0, 3, 1])
+        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        transformed = positions[:, permutation] @ rotation.T + torch.tensor([7.0, -3.0])
+        self.assertTrue(
+            torch.allclose(
+                invariant_descriptor(
+                    positions,
+                    energy_function=dw4_energy,
+                    energy_mean=torch.tensor(0.0),
+                    energy_standard_deviation=torch.tensor(1.0),
+                    energy_feature_scale=1.0,
+                ),
+                invariant_descriptor(
+                    transformed,
+                    energy_function=dw4_energy,
+                    energy_mean=torch.tensor(0.0),
+                    energy_standard_deviation=torch.tensor(1.0),
+                    energy_feature_scale=1.0,
+                ),
+                atol=1e-6,
             )
         )
 

@@ -24,6 +24,18 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--save-samples", action="store_true")
+    parser.add_argument(
+        "--valid-energy-quantile",
+        type=float,
+        default=0.99,
+        help="Reference-energy quantile defining the useful-energy cutoff.",
+    )
+    parser.add_argument(
+        "--min-pair-distance",
+        type=float,
+        default=0.5,
+        help="Minimum pair separation defining a collision-free configuration.",
+    )
     return parser.parse_args()
 
 
@@ -97,6 +109,7 @@ def distribution_metrics(
     generated_radius = generated.square().sum(dim=-1).mean(dim=-1).sqrt()
     reference_radius = reference.square().sum(dim=-1).mean(dim=-1).sqrt()
     finite_generated_energy = generated_energy[torch.isfinite(generated_energy)]
+    reference_q99, reference_q999 = torch.quantile(reference_energy, torch.tensor((0.99, 0.999)))
     return {
         "finite_energy_fraction": float(torch.isfinite(generated_energy).float().mean()),
         "energy_mean": float(finite_generated_energy.mean())
@@ -112,10 +125,113 @@ def distribution_metrics(
         "collision_fraction_d_lt_0_5": float(
             (pair_distances(generated).min(dim=-1).values < 0.5).float().mean()
         ),
+        "energy_tail": {
+            "reference_q99": float(reference_q99),
+            "generated_mass_above_reference_q99": float((generated_energy > reference_q99).float().mean()),
+            "reference_q999": float(reference_q999),
+            "generated_mass_above_reference_q999": float((generated_energy > reference_q999).float().mean()),
+        },
         "reference": {
             "energy_mean": float(reference_energy.mean()),
             "energy_std": float(reference_energy.std()),
         },
+    }
+
+
+def validity_metrics(
+    generated: torch.Tensor,
+    reference: torch.Tensor,
+    system_name: str,
+    energy_quantile: float,
+    minimum_pair_distance: float,
+) -> dict[str, Any]:
+    """Report broad sample usefulness without requiring distribution matching.
+
+    A sample is useful when it is finite, collision-free, and below a declared
+    high-energy reference cutoff.  The reference only sets that broad cutoff;
+    no density or per-bin matching is required.
+    """
+    if not 0.0 < energy_quantile < 1.0:
+        raise ValueError("valid energy quantile must lie strictly between zero and one")
+    if minimum_pair_distance <= 0.0:
+        raise ValueError("minimum pair distance must be positive")
+    system = get_system(system_name)
+    reference_energy = system.energy(reference)
+    energy_cutoff = torch.quantile(reference_energy[torch.isfinite(reference_energy)], energy_quantile)
+
+    def classify(samples: torch.Tensor) -> dict[str, float]:
+        energy = system.energy(samples)
+        finite = torch.isfinite(energy)
+        collision_free = pair_distances(samples).min(dim=-1).values >= minimum_pair_distance
+        useful_energy = finite & (energy <= energy_cutoff)
+        valid = collision_free & useful_energy
+        return {
+            "finite_fraction": float(finite.float().mean()),
+            "collision_free_fraction": float(collision_free.float().mean()),
+            "energy_under_cutoff_fraction": float(useful_energy.float().mean()),
+            "valid_fraction": float(valid.float().mean()),
+        }
+
+    return {
+        "definition": {
+            "minimum_pair_distance": minimum_pair_distance,
+            "energy_cutoff_reference_quantile": energy_quantile,
+            "energy_cutoff": float(energy_cutoff),
+        },
+        "generated": classify(generated),
+        "reference": classify(reference),
+    }
+
+
+def valid_sample_observables(
+    generated: torch.Tensor,
+    reference: torch.Tensor,
+    system_name: str,
+    energy_quantile: float,
+    minimum_pair_distance: float,
+) -> dict[str, Any]:
+    """Compare useful retained samples, rather than demanding raw density equality.
+
+    Both populations are conditioned on the identical collision and energy rule.
+    This measures whether the generator is useful as a fast proposal source after
+    a transparent quality filter; it is not a replacement for a Boltzmann test.
+    """
+    system = get_system(system_name)
+    reference_energy = system.energy(reference)
+    cutoff = torch.quantile(reference_energy[torch.isfinite(reference_energy)], energy_quantile)
+
+    def mask(samples: torch.Tensor) -> torch.Tensor:
+        energy = system.energy(samples)
+        return (
+            torch.isfinite(energy)
+            & (energy <= cutoff)
+            & (pair_distances(samples).min(dim=-1).values >= minimum_pair_distance)
+        )
+
+    generated_mask, reference_mask = mask(generated), mask(reference)
+    retained_generated, retained_reference = generated[generated_mask], reference[reference_mask]
+    if not len(retained_generated) or not len(retained_reference):
+        raise ValueError("validity filter retained no samples")
+    generated_energy, reference_energy = system.energy(retained_generated), system.energy(retained_reference)
+    generated_distance = pair_distances(retained_generated).flatten()
+    reference_distance = pair_distances(retained_reference).flatten()
+    generated_radius = retained_generated.square().sum(dim=-1).mean(dim=-1).sqrt()
+    reference_radius = retained_reference.square().sum(dim=-1).mean(dim=-1).sqrt()
+    return {
+        "definition": {
+            "minimum_pair_distance": minimum_pair_distance,
+            "energy_cutoff_reference_quantile": energy_quantile,
+            "energy_cutoff": float(cutoff),
+        },
+        "generated_retained_fraction": float(generated_mask.float().mean()),
+        "reference_retained_fraction": float(reference_mask.float().mean()),
+        "retained_counts": {"generated": int(len(retained_generated)), "reference": int(len(retained_reference))},
+        "energy_mean_generated": float(generated_energy.mean()),
+        "energy_mean_reference": float(reference_energy.mean()),
+        "energy_wasserstein_1": wasserstein_1(generated_energy, reference_energy),
+        "energy_histogram_js": histogram_js(generated_energy, reference_energy),
+        "pair_distance_wasserstein_1": wasserstein_1(generated_distance, reference_distance),
+        "radius_wasserstein_1": wasserstein_1(generated_radius, reference_radius),
     }
 
 
@@ -209,6 +325,20 @@ def main() -> None:
         "num_test_samples": len(reference),
         "runtime": device_summary(device),
         "sample_metrics": distribution_metrics(generated, reference, system.name),
+        "validity_metrics": validity_metrics(
+            generated,
+            reference,
+            system.name,
+            args.valid_energy_quantile,
+            args.min_pair_distance,
+        ),
+        "valid_sample_observables": valid_sample_observables(
+            generated,
+            reference,
+            system.name,
+            args.valid_energy_quantile,
+            args.min_pair_distance,
+        ),
         "endpoint_transport_distance_per_particle": endpoint_distance,
         "paper_metrics": {
             "reference_results": system.paper_reference,
