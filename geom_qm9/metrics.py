@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import torch
+from rdkit import Chem
+from rdkit.Chem import rdMolAlign
 
 from .drift import descriptor
 
@@ -40,3 +42,57 @@ def geometry_validity(positions: torch.Tensor, bond_index: torch.Tensor, minimum
         result["bond_length_mean"] = float(bonds.mean())
         result["bond_length_std"] = float(bonds.std())
     return result
+
+
+def _molecule_with_conformers(
+    atomic_numbers: torch.Tensor,
+    bond_index: torch.Tensor,
+    bond_order: torch.Tensor,
+    conformers: torch.Tensor,
+) -> Chem.Mol:
+    """Create an RDKit molecule retaining the dataset's coordinate atom order."""
+    editable = Chem.RWMol()
+    for atomic_number in atomic_numbers.tolist():
+        editable.AddAtom(Chem.Atom(int(atomic_number)))
+    bond_type = {1.0: Chem.BondType.SINGLE, 1.5: Chem.BondType.AROMATIC, 2.0: Chem.BondType.DOUBLE, 3.0: Chem.BondType.TRIPLE}
+    for (left, right), order in zip(bond_index.T.tolist(), bond_order.tolist(), strict=True):
+        editable.AddBond(int(left), int(right), bond_type[round(float(order), 1)])
+    molecule = editable.GetMol()
+    for positions in conformers:
+        conformer = Chem.Conformer(len(atomic_numbers))
+        for index, (x, y, z) in enumerate(positions.tolist()):
+            conformer.SetAtomPosition(index, (float(x), float(y), float(z)))
+        molecule.AddConformer(conformer, assignId=True)
+    return molecule
+
+
+def symmetry_aware_cov_mat(
+    generated: torch.Tensor,
+    reference: torch.Tensor,
+    atomic_numbers: torch.Tensor,
+    bond_index: torch.Tensor,
+    bond_order: torch.Tensor,
+    threshold: float = 0.5,
+) -> dict[str, float]:
+    """Compute standard COV/MAT via RDKit best RMSD over graph automorphisms.
+
+    Rigid alignment and chemically valid atom symmetries are used only here,
+    in evaluation. The model and drift objective remain alignment-free.
+    """
+    all_conformers = torch.cat((generated, reference))
+    molecule = _molecule_with_conformers(atomic_numbers, bond_index, bond_order, all_conformers)
+    generated_count = len(generated)
+    distances = torch.empty(generated_count, len(reference))
+    for generated_index in range(generated_count):
+        for reference_index in range(len(reference)):
+            distances[generated_index, reference_index] = rdMolAlign.GetBestRMS(
+                molecule, molecule, generated_index, generated_count + reference_index
+            )
+    generated_nearest = distances.min(dim=1).values
+    reference_nearest = distances.min(dim=0).values
+    return {
+        "cov_recall": float((reference_nearest <= threshold).float().mean()),
+        "mat_recall": float(reference_nearest.mean()),
+        "cov_precision": float((generated_nearest <= threshold).float().mean()),
+        "mat_precision": float(generated_nearest.mean()),
+    }

@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     torch.manual_seed(args.seed)
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     args.output.mkdir(parents=True, exist_ok=True)
     centers = torch.tensor([[-0.75, 0.0], [0.75, 0.0]], device=device)
     crossings = torch.tensor([[0.0, (1 - 0.75**2) ** 0.5], [0.0, -(1 - 0.75**2) ** 0.5]], device=device)

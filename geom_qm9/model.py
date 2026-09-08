@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -13,7 +15,9 @@ def _mlp(inputs: int, hidden: int, outputs: int) -> nn.Sequential:
 class GraphEGNNLayer(nn.Module):
     """Complete-graph EGNN layer, conditioned on atom and bond features."""
 
-    def __init__(self, hidden_dim: int, radial_basis: int, max_distance: float) -> None:
+    def __init__(
+        self, hidden_dim: int, radial_basis: int, max_distance: float, coordinate_update_scale: float = 1.0
+    ) -> None:
         super().__init__()
         self.edge = _mlp(2 * hidden_dim + radial_basis + 2, hidden_dim, hidden_dim)
         self.gate = nn.Linear(hidden_dim, 1)
@@ -23,6 +27,14 @@ class GraphEGNNLayer(nn.Module):
         centers = torch.linspace(0.0, max_distance, radial_basis)
         self.register_buffer("centers", centers)
         self.gamma = 1.0 / max(max_distance / max(radial_basis - 1, 1), 1e-3) ** 2
+        if not 0.0 < coordinate_update_scale <= 1.0:
+            raise ValueError("coordinate_update_scale must lie in (0, 1]")
+        # The coordinate message already has a bounded edge-wise gate, but its
+        # displacement is proportional to the current interatomic separation.
+        # This bounded residual scale prevents deep coordinate updates becoming
+        # self-amplifying while remaining fully E(3)-equivariant.
+        initial_logit = 8.0 if coordinate_update_scale == 1.0 else math.atanh(coordinate_update_scale)
+        self.coordinate_scale_logit = nn.Parameter(torch.tensor(initial_logit))
         nn.init.normal_(self.coordinate[-1].weight, std=1e-3)
         nn.init.zeros_(self.coordinate[-1].bias)
 
@@ -41,7 +53,8 @@ class GraphEGNNLayer(nn.Module):
         mask = 1.0 - torch.eye(atoms, device=positions.device, dtype=positions.dtype)[None, :, :, None]
         messages = messages * torch.sigmoid(self.gate(messages)) * mask
         coordinate_weight = torch.tanh(self.coordinate(messages)) * mask
-        positions = positions + (difference * coordinate_weight).sum(2) / max(atoms - 1, 1)
+        coordinate_step = (difference * coordinate_weight).sum(2) / max(atoms - 1, 1)
+        positions = positions + torch.tanh(self.coordinate_scale_logit) * coordinate_step
         positions = positions - positions.mean(1, keepdim=True)
         aggregate = messages.sum(2) / max(atoms - 1, 1)
         features = self.norm(features + self.node(torch.cat((features, aggregate), -1)))
@@ -58,13 +71,18 @@ class ConformerGenerator(nn.Module):
         radial_basis: int = 24,
         max_distance: float = 8.0,
         atom_embedding_size: int = 32,
+        coordinate_update_scale: float = 1.0,
     ) -> None:
         super().__init__()
         self.atom_embedding = nn.Embedding(128, atom_embedding_size)
         self.input = _mlp(atom_embedding_size + 1, hidden_dim, hidden_dim)
         self.layers = nn.ModuleList(
-            GraphEGNNLayer(hidden_dim, radial_basis, max_distance) for _ in range(layers)
+            GraphEGNNLayer(hidden_dim, radial_basis, max_distance, coordinate_update_scale) for _ in range(layers)
         )
+
+    def coordinate_update_scales(self) -> torch.Tensor:
+        """Return bounded residual scales, one for each equivariant layer."""
+        return torch.stack([torch.tanh(layer.coordinate_scale_logit) for layer in self.layers])
 
     def forward(
         self, coordinate_noise: torch.Tensor, atomic_numbers: torch.Tensor, bond_index: torch.Tensor,

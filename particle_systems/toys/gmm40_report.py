@@ -8,7 +8,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 
-from particle_systems.toys.gmm40 import GMM40, Generator, metrics
+try:  # Supports both ``python -m`` and a copied standalone toys folder.
+    from .gmm40 import GMM40, Generator, metrics
+except ImportError:
+    from gmm40 import GMM40, Generator, metrics
 
 
 def main() -> None:

@@ -1,0 +1,28 @@
+{
+  "seed": 42,
+  "data": "geom_qm9/data/processed-initial500",
+  "output": "geom_qm9/artifacts/runs/gaussian-initial500-seed42",
+  "model": {
+    "hidden_dim": 128,
+    "layers": 6,
+    "radial_basis": 24,
+    "max_distance": 8.0,
+    "atom_embedding_size": 32
+  },
+  "training": {
+    "steps": 20000,
+    "batch_size": 256,
+    "positive_references": 256,
+    "max_conformers": 50,
+    "coordinate_noise_scale": 1.0,
+    "bandwidth_scale": 1.0,
+    "eta": 0.1,
+    "repulsion": 1.0,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.000001,
+    "gradient_clip": 10.0,
+    "ema_decay": 0.999,
+    "log_every": 100,
+    "checkpoint_every": 1000
+  }
+}
