@@ -1,31 +1,31 @@
 {
-  "system": "dw4",
+  "system": "lj55",
   "drift": {
     "space": "particle_coordinates",
     "kernel": "gaussian",
     "normalized": false
   },
-  "data": "particle_systems/data/dw4.npz",
-  "output": "particle_systems/artifacts/runs/dw4/gaussian-large",
+  "data": "particle_systems/data/lj55.npz",
+  "output": "particle_systems/artifacts/runs/lj55/gaussian",
   "seed": 42,
   "model": {
     "feature_dim": 8,
-    "hidden_dim": 128,
-    "layers": 6,
-    "radial_basis": 24,
-    "max_distance": 8.0
+    "hidden_dim": 64,
+    "layers": 4,
+    "radial_basis": 16,
+    "max_distance": 4.0
   },
   "training": {
-    "steps": 50000,
-    "batch_size": 2048,
-    "positive_references": 2048,
+    "steps": 100000,
+    "batch_size": 64,
+    "positive_references": 64,
     "coordinate_noise_scale": 1.0,
     "bandwidth": "auto",
     "bandwidth_scale_start": 1.5,
     "bandwidth_scale_end": 0.5,
-    "bandwidth_anneal_start": 10000,
-    "bandwidth_anneal_end": 30000,
-    "eta": 0.5,
+    "bandwidth_anneal_start": 30000,
+    "bandwidth_anneal_end": 100000,
+    "eta": 0.2,
     "repulsion": 1.0,
     "min_radius_fraction": 0.25,
     "learning_rate": 0.0002,
@@ -33,6 +33,6 @@
     "gradient_clip": 1.0,
     "ema_decay": 0.999,
     "log_every": 100,
-    "checkpoint_every": 1000
+    "checkpoint_every": 10000
   }
 }

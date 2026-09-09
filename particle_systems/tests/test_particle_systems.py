@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
 import torch
 
-from particle_systems.drift import UnnormalizedDrift, descriptor_whitening, invariant_descriptor
 from particle_systems.evaluate import valid_sample_observables, validity_metrics
 from particle_systems.model import ParticleGenerator
+from particle_systems.prepare_data import select_rows
 from particle_systems.systems import center, dw4_energy, get_system, lj_energy
 from particle_systems.toys.gmm40 import GMM40, metrics
 from particle_systems.train import EnergyStratifiedReferenceSampler, bandwidth_scale, learning_rate
+from particle_systems.unnormalized_drifting import DirectCoordinateDrift, median_bandwidth
 
 
 class PotentialTests(unittest.TestCase):
@@ -20,6 +22,23 @@ class PotentialTests(unittest.TestCase):
     def test_lj_pair_at_minimum(self) -> None:
         positions = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
         self.assertTrue(torch.allclose(lj_energy(positions), torch.tensor([-1.0])))
+
+    def test_lj55_registry_matches_the_two_part_release(self) -> None:
+        system = get_system("lj55")
+        self.assertEqual((system.particles, system.dimensions), (55, 3))
+        self.assertEqual(len(system.sources), 2)
+        self.assertEqual(sum(source.shape[0] for source in system.sources), 10_000_000)
+        self.assertTrue(all(source.shape[1] == 165 for source in system.sources))
+
+    def test_global_rows_are_selected_across_source_parts(self) -> None:
+        parts = [np.arange(6).reshape(3, 2), np.arange(6, 12).reshape(3, 2)]
+        actual = select_rows(parts, np.array([0, 2, 3, 5]))
+        expected = np.array([[0, 1], [4, 5], [6, 7], [10, 11]], dtype=np.float32)
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_multipart_selection_rejects_an_out_of_range_index(self) -> None:
+        with self.assertRaises(IndexError):
+            select_rows([np.zeros((2, 3))], np.array([2]))
 
     def test_dw4_validity_is_a_broad_threshold_not_a_distribution_distance(self) -> None:
         samples = torch.tensor(
@@ -67,7 +86,7 @@ class ReferenceSamplingTests(unittest.TestCase):
     def test_uniform_positive_weights_match_the_empirical_mean_field(self) -> None:
         query = center(torch.randn(2, 4, 2))
         references = center(torch.randn(5, 4, 2))
-        drift = UnnormalizedDrift(1.0)
+        drift = DirectCoordinateDrift(1.0)
         ordinary, _ = drift(query, references, repulsion=0.0)
         weighted, _ = drift(
             query,
@@ -79,102 +98,72 @@ class ReferenceSamplingTests(unittest.TestCase):
 
 
 class DriftTests(unittest.TestCase):
-    def test_descriptor_is_invariant_to_rigid_motion_and_permutation(self) -> None:
-        positions = center(torch.randn(3, 4, 2))
-        permutation = torch.tensor([2, 0, 3, 1])
-        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        transformed = positions[:, permutation] @ rotation.T + torch.tensor([7.0, -3.0])
-        self.assertTrue(
-            torch.allclose(
-                invariant_descriptor(positions), invariant_descriptor(transformed), atol=1e-6
-            )
-        )
+    def test_field_matches_analytical_gaussian_gradient(self) -> None:
+        query = torch.tensor([[[0.0]]])
+        reference = torch.tensor([[[1.0]]])
+        field, _ = DirectCoordinateDrift(2.0)(query, reference, repulsion=0.0)
+        expected = torch.exp(torch.tensor(-1.0 / 8.0)) / 4.0
+        self.assertTrue(torch.allclose(field.squeeze(), expected))
 
-    def test_energy_augmented_descriptor_is_invariant_to_rigid_motion_and_permutation(self) -> None:
-        positions = center(torch.randn(3, 4, 2))
-        permutation = torch.tensor([2, 0, 3, 1])
-        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        transformed = positions[:, permutation] @ rotation.T + torch.tensor([7.0, -3.0])
-        self.assertTrue(
-            torch.allclose(
-                invariant_descriptor(
-                    positions,
-                    energy_function=dw4_energy,
-                    energy_mean=torch.tensor(0.0),
-                    energy_standard_deviation=torch.tensor(1.0),
-                    energy_feature_scale=1.0,
-                ),
-                invariant_descriptor(
-                    transformed,
-                    energy_function=dw4_energy,
-                    energy_mean=torch.tensor(0.0),
-                    energy_standard_deviation=torch.tensor(1.0),
-                    energy_feature_scale=1.0,
-                ),
-                atol=1e-6,
-            )
-        )
+    def test_auto_bandwidth_uses_flattened_coordinate_distance(self) -> None:
+        samples = torch.tensor([[[0.0]], [[3.0]], [[7.0]]])
+        self.assertEqual(median_bandwidth(samples), 4.0)
 
     def test_field_is_not_kernel_mass_normalized(self) -> None:
         query = torch.tensor([[[-0.5, 0.0], [0.5, 0.0]]])
         near = torch.tensor([[[-1.0, 0.0], [1.0, 0.0]]])
         far = torch.tensor([[[-5.0, 0.0], [5.0, 0.0]]])
-        drift = UnnormalizedDrift(1.0)
+        drift = DirectCoordinateDrift(1.0)
         near_field, _ = drift(query, near, repulsion=0.0)
         far_field, _ = drift(query, far, repulsion=0.0)
         self.assertLess(far_field.norm(), near_field.norm())
-
-    def test_imq_retains_more_far_field_than_gaussian(self) -> None:
-        query = torch.tensor([[[-0.5, 0.0], [0.5, 0.0]]])
-        far = torch.tensor([[[-5.0, 0.0], [5.0, 0.0]]])
-        gaussian_field, _ = UnnormalizedDrift(1.0, kernel="gaussian")(
-            query, far, repulsion=0.0
-        )
-        imq_field, _ = UnnormalizedDrift(1.0, kernel="imq")(
-            query, far, repulsion=0.0
-        )
-        self.assertGreater(imq_field.norm(), gaussian_field.norm())
 
     def test_attraction_expands_an_undersized_configuration(self) -> None:
         query = center(
             torch.tensor([[[-0.5, -0.5], [-0.5, 0.5], [0.5, -0.5], [0.5, 0.5]]])
         )
         reference = 3.0 * query
-        field, _ = UnnormalizedDrift(2.0)(query, reference, repulsion=0.0)
+        field, _ = DirectCoordinateDrift(2.0)(query, reference, repulsion=0.0)
         self.assertGreater(torch.sum(field * query), 0.0)
 
-    def test_field_is_permutation_and_rotation_equivariant(self) -> None:
+    def test_field_is_equivariant_when_query_and_references_transform_together(self) -> None:
         torch.manual_seed(7)
         query = center(torch.randn(2, 4, 2))
         references = center(torch.randn(5, 4, 2))
         permutation = torch.tensor([2, 0, 3, 1])
         rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        drift = UnnormalizedDrift(2.0)
+        drift = DirectCoordinateDrift(2.0)
         expected, _ = drift(query, references, repulsion=0.0)
-        actual, _ = drift(query[:, permutation] @ rotation.T, references, repulsion=0.0)
+        actual, _ = drift(
+            query[:, permutation] @ rotation.T,
+            references[:, permutation] @ rotation.T,
+            repulsion=0.0,
+        )
         self.assertTrue(
             torch.allclose(actual, expected[:, permutation] @ rotation.T, atol=2e-5, rtol=2e-5)
         )
+
+    def test_field_depends_on_reference_particle_order(self) -> None:
+        query = torch.tensor([[[0.0, 0.0], [1.0, 0.0]]])
+        references = torch.tensor([[[0.0, 1.0], [2.0, 0.0]]])
+        drift = DirectCoordinateDrift(2.0)
+        ordered, _ = drift(query, references, repulsion=0.0)
+        permuted, _ = drift(query, references[:, [1, 0]], repulsion=0.0)
+        self.assertFalse(torch.allclose(ordered, permuted))
 
     def test_drift_preserves_center(self) -> None:
         query = center(torch.randn(3, 4, 2))
         references = center(torch.randn(5, 4, 2))
-        field, _ = UnnormalizedDrift(2.0)(query, references, repulsion=0.0)
+        field, _ = DirectCoordinateDrift(2.0)(query, references, repulsion=0.0)
         self.assertTrue(torch.allclose(field.mean(dim=1), torch.zeros(3, 2), atol=1e-6))
 
-    def test_whitened_descriptor_field_remains_equivariant(self) -> None:
-        torch.manual_seed(8)
-        samples = center(torch.randn(16, 4, 2))
-        mean, whitener = descriptor_whitening(samples)
-        query, references = samples[:2], samples[2:]
-        permutation = torch.tensor([2, 0, 3, 1])
-        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        drift = UnnormalizedDrift(1.0, descriptor_mean=mean, descriptor_whitener=whitener)
-        expected, _ = drift(query, references, repulsion=0.0)
-        actual, _ = drift(query[:, permutation] @ rotation.T, references, repulsion=0.0)
-        self.assertTrue(
-            torch.allclose(actual, expected[:, permutation] @ rotation.T, atol=2e-5, rtol=2e-5)
-        )
+    def test_step_applies_the_requested_field_scale(self) -> None:
+        query = torch.tensor([[[0.0]]])
+        reference = torch.tensor([[[1.0]]])
+        drift = DirectCoordinateDrift(2.0)
+        field, _ = drift(query, reference, repulsion=0.0)
+        updated, _ = drift.step(query, reference, step_size=0.3, repulsion=0.0)
+        self.assertTrue(torch.allclose(updated, query + 0.3 * field))
 
 
 class BandwidthScheduleTests(unittest.TestCase):

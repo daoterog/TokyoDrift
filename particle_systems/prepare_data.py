@@ -1,4 +1,4 @@
-"""Download, verify, reshape, and split the official DW4/LJ13 arrays."""
+"""Download, verify, reshape, and split the official particle-system arrays."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -17,10 +18,14 @@ from .systems import get_system
 def arguments() -> argparse.Namespace:
     """Parse data-preparation command-line arguments."""
     parser = argparse.ArgumentParser(description="Download and split an official particle dataset.")
-    parser.add_argument("system", choices=("dw4", "lj13"))
+    parser.add_argument("system", choices=("dw4", "lj13", "lj55"))
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
-        "--source", type=Path, default=None, help="Use an existing official NPY file."
+        "--source",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Use existing official NPY file(s), in the published part order.",
     )
     parser.add_argument("--train-size", type=int, default=100_000)
     parser.add_argument("--test-size", type=int, default=100_000)
@@ -47,16 +52,38 @@ def download(url: str, destination: Path) -> None:
     partial.replace(destination)
 
 
-def load_official_source(path: Path, system_name: str) -> tuple[np.ndarray, np.ndarray | None]:
-    """Load one of the two known official source formats."""
+def load_official_sources(
+    paths: Sequence[Path], system_name: str
+) -> tuple[list[np.ndarray], np.ndarray | None]:
+    """Memory-map ordinary arrays or load DW4's legacy object payload."""
     if system_name == "dw4":
         # This legacy file is an object array containing a torch.Tensor and an
         # index permutation. It is loaded only after its official hash passes.
-        payload = np.load(path, allow_pickle=True)
+        payload = np.load(paths[0], allow_pickle=True)
         coordinates = payload[0].numpy()
         order = np.asarray(payload[1], dtype=np.int64)
-        return coordinates, order
-    return np.load(path, mmap_mode="r"), None
+        return [coordinates], order
+    return [np.load(path, mmap_mode="r") for path in paths], None
+
+
+def select_rows(parts: Sequence[np.ndarray], indices: np.ndarray) -> np.ndarray:
+    """Select globally indexed rows from one or more source arrays."""
+    if not parts:
+        raise ValueError("at least one source part is required")
+    if indices.ndim != 1:
+        raise ValueError("source indices must be one-dimensional")
+    available = sum(len(part) for part in parts)
+    if np.any(indices < 0) or np.any(indices >= available):
+        raise IndexError("source index is outside the multipart dataset")
+    columns = parts[0].shape[1]
+    selected = np.empty((len(indices), columns), dtype=np.float32)
+    offset = 0
+    for part in parts:
+        within_part = (indices >= offset) & (indices < offset + len(part))
+        local_indices = indices[within_part] - offset
+        selected[within_part] = np.asarray(part[local_indices], dtype=np.float32)
+        offset += len(part)
+    return selected
 
 
 def reshape_and_center(values: np.ndarray, particles: int, dimensions: int) -> np.ndarray:
@@ -67,48 +94,68 @@ def reshape_and_center(values: np.ndarray, particles: int, dimensions: int) -> n
 
 def prepare(
     system_name: str,
-    source: Path,
+    sources: Path | Sequence[Path],
     output: Path,
     train_size: int,
     test_size: int,
     seed: int,
 ) -> None:
-    """Verify and convert an official file into deterministic train/test splits."""
+    """Verify and convert official source file(s) into deterministic splits."""
     system = get_system(system_name)
+    source_paths = [sources] if isinstance(sources, Path) else list(sources)
+    if len(source_paths) != len(system.sources):
+        raise ValueError(
+            f"{system.name} requires {len(system.sources)} source file(s), got {len(source_paths)}"
+        )
     if train_size <= 0 or test_size <= 0:
         raise ValueError("train-size and test-size must be positive")
-    actual_hash = sha256(source)
-    if actual_hash != system.sha256:
-        raise ValueError(f"SHA-256 mismatch for {source}: {actual_hash}")
+    for path, source_definition in zip(source_paths, system.sources, strict=True):
+        actual_hash = sha256(path)
+        if actual_hash != source_definition.sha256:
+            raise ValueError(f"SHA-256 mismatch for {path}: {actual_hash}")
 
-    coordinates, official_order = load_official_source(source, system_name)
-    if coordinates.shape != system.source_shape:
-        raise ValueError(f"expected source shape {system.source_shape}, got {coordinates.shape}")
+    coordinate_parts, official_order = load_official_sources(source_paths, system_name)
+    for coordinates, source_definition in zip(
+        coordinate_parts, system.sources, strict=True
+    ):
+        if coordinates.shape != source_definition.shape:
+            raise ValueError(
+                f"expected {source_definition.filename} shape {source_definition.shape}, "
+                f"got {coordinates.shape}"
+            )
+    available = sum(len(coordinates) for coordinates in coordinate_parts)
     requested = train_size + test_size
-    if requested > coordinates.shape[0]:
-        raise ValueError(f"requested {requested} samples from a dataset of {coordinates.shape[0]}")
+    if requested > available:
+        raise ValueError(f"requested {requested} samples from a dataset of {available}")
 
     if official_order is not None:
         train_indices = official_order[:train_size]
         test_indices = official_order[train_size:requested]
     else:
-        selection = np.random.default_rng(seed).choice(
-            coordinates.shape[0], size=requested, replace=False
-        )
+        selection = np.random.default_rng(seed).choice(available, size=requested, replace=False)
         train_indices = np.sort(selection[:train_size])
         test_indices = np.sort(selection[train_size:])
-    # Sorted LJ13 indices turn random 1.56 GB memmap seeks into a sequential
-    # scan. Sample order is immaterial because training resamples uniformly.
-    train = reshape_and_center(coordinates[train_indices], system.particles, system.dimensions)
-    test = reshape_and_center(coordinates[test_indices], system.particles, system.dimensions)
+    # Sorted Lennard-Jones indices make selection from large memmaps mostly sequential.
+    train = reshape_and_center(
+        select_rows(coordinate_parts, train_indices), system.particles, system.dimensions
+    )
+    test = reshape_and_center(
+        select_rows(coordinate_parts, test_indices), system.particles, system.dimensions
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     metadata = json.dumps(
         {
             "system": system.name,
             "particles": system.particles,
             "dimensions": system.dimensions,
-            "source_url": system.osf_url,
-            "source_sha256": system.sha256,
+            "sources": [
+                {
+                    "filename": source.filename,
+                    "url": source.url,
+                    "sha256": source.sha256,
+                }
+                for source in system.sources
+            ],
             "seed": seed,
         }
     )
@@ -121,13 +168,16 @@ def main() -> None:
     args = arguments()
     system = get_system(args.system)
     output = args.output or Path("particle_systems/data") / f"{args.system}.npz"
-    source = args.source
-    if source is None:
-        source = output.parent / "downloads" / f"{args.system}-official.npy"
-        if not source.exists():
-            print(f"downloading {system.osf_url} to {source}")
-            download(system.osf_url, source)
-    prepare(args.system, source, output, args.train_size, args.test_size, args.seed)
+    sources = args.source
+    if sources is None:
+        sources = []
+        for source_definition in system.sources:
+            source = output.parent / "downloads" / source_definition.filename
+            if not source.exists():
+                print(f"downloading {source_definition.url} to {source}")
+                download(source_definition.url, source)
+            sources.append(source)
+    prepare(args.system, sources, output, args.train_size, args.test_size, args.seed)
 
 
 if __name__ == "__main__":

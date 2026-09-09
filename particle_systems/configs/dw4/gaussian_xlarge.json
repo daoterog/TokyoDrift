@@ -1,5 +1,10 @@
 {
   "system": "dw4",
+  "drift": {
+    "space": "particle_coordinates",
+    "kernel": "gaussian",
+    "normalized": false
+  },
   "data": "particle_systems/data/dw4.npz",
   "output": "particle_systems/artifacts/runs/dw4/gaussian-xlarge",
   "seed": 42,

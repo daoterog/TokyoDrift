@@ -1,5 +1,10 @@
 {
   "system": "lj13",
+  "drift": {
+    "space": "particle_coordinates",
+    "kernel": "gaussian",
+    "normalized": false
+  },
   "data": "particle_systems/data/lj13.npz",
   "output": "particle_systems/artifacts/runs/lj13/gaussian",
   "seed": 42,

@@ -1,8 +1,14 @@
 # Particle-system drift benchmarks
 
-A self-contained implementation of alignment-free, unnormalized kernel drift on the DW4 and LJ13 particle systems from *Equivariant Flow Matching* (Klein, Krämer, and Noé, 2023). It deliberately excludes QM9 and all chemistry-specific code.
+A self-contained implementation of direct-coordinate, unnormalized Gaussian-kernel drift on
+the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow Matching* (Klein, Krämer, and Noé,
+2023). It deliberately excludes QM9 and all chemistry-specific code.
 
-The default method uses a single Gaussian kernel on permutation-, rotation-, reflection-, and translation-invariant sorted pair-distance descriptors. The generator is E(n)-equivariant and directly maps centered noise to a particle configuration.
+The method applies the analytical gradient of a Gaussian kernel directly to flattened particle
+coordinates. It uses data attraction minus generated-sample repulsion without dividing by local
+kernel mass. The generator remains E(n)-equivariant and maps centered noise directly to a
+particle configuration, but the drift comparison itself depends on particle ordering and global
+orientation.
 
 ## Layout
 
@@ -11,12 +17,13 @@ particle_systems/
 ├── configs/          # tracked, grouped by system
 ├── data/             # local datasets; ignored by Git
 ├── artifacts/        # checkpoints and evaluations; ignored by Git
+├── jobs/             # compute-node environment and dataset download jobs
 ├── scripts/          # platform setup helpers
 ├── tests/            # unit tests
 └── *.py              # training, evaluation, model, drift, and system modules
 ```
 
-`configs/dw4/gaussian.json` and `configs/lj13/gaussian.json` are the baseline configurations.
+Each system has a baseline configuration at `configs/<system>/gaussian.json`.
 
 ## Setup and data
 
@@ -27,6 +34,18 @@ uv run --project particle_systems --no-sync python -m particle_systems.prepare_d
 
 The data command downloads the official array, verifies its checksum, centers configurations, and writes deterministic train/test splits under `data/`.
 
+For a compute node, install the locked CUDA environment and prepare every dataset with:
+
+```bash
+sbatch particle_systems/jobs/download_env.sh
+# Submit this after the environment job succeeds.
+sbatch particle_systems/jobs/download_datasets.sh
+```
+
+Run `bash particle_systems/jobs/download_env.sh cpu` instead when CUDA is not required. LJ55 is
+distributed as two 3.3 GB arrays, so downloading all source data requires at least 8.3 GB plus
+space for the prepared archives.
+
 ## Train
 
 ```bash
@@ -35,6 +54,17 @@ uv run --project particle_systems --no-sync python -m particle_systems.train \
 ```
 
 Every run must use its own `artifacts/runs/...` directory. Do not run or resume two processes against the same directory.
+
+The large DW4 configuration can be trained and evaluated in one GPU job:
+
+```bash
+sbatch particle_systems/jobs/train_dw4.sh
+```
+
+The job stores its final checkpoint under `models/dw4/`. Every model run also keeps the fully
+resolved training parameters, including command-line overrides and derived bandwidths, in
+`models/dw4/runs/<job-id>/parameters.json`. Metrics, plots, and the combined job log are written
+under `results/dw4/<job-id>/`.
 
 ## Evaluate
 

@@ -1,4 +1,4 @@
-"""Benchmark definitions and invariant potentials for DW4 and LJ13."""
+"""Benchmark definitions and invariant potentials for DW4, LJ13, and LJ55."""
 
 from __future__ import annotations
 
@@ -36,6 +36,16 @@ def lj_energy(positions: torch.Tensor) -> torch.Tensor:
 
 
 @dataclass(frozen=True)
+class DatasetSource:
+    """One checksummed source array belonging to a particle dataset."""
+
+    filename: str
+    url: str
+    sha256: str
+    shape: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class ParticleSystem:
     """Immutable definition of one fixed-size particle benchmark."""
 
@@ -43,9 +53,7 @@ class ParticleSystem:
     particles: int
     dimensions: int
     energy: EnergyFunction
-    osf_url: str
-    sha256: str
-    source_shape: tuple[int, int]
+    sources: tuple[DatasetSource, ...]
     paper_reference: dict[str, dict[str, float]]
 
 
@@ -55,9 +63,14 @@ SYSTEMS = {
         particles=4,
         dimensions=2,
         energy=dw4_energy,
-        osf_url="https://osf.io/download/mus7z/",
-        sha256="60065e6c08c40e3e2d11b9fb15cbe298e457a6954af2d932d984d8ee19181b9d",
-        source_shape=(1_000_000, 8),
+        sources=(
+            DatasetSource(
+                filename="dw4-dataidx.npy",
+                url="https://osf.io/download/mus7z/",
+                sha256="60065e6c08c40e3e2d11b9fb15cbe298e457a6954af2d932d984d8ee19181b9d",
+                shape=(1_000_000, 8),
+            ),
+        ),
         paper_reference={
             "likelihood": {"nll": 1.72, "ess_percent": 86.87, "path_length": 3.11},
             "ot_flow_matching": {"nll": 1.70, "ess_percent": 92.37, "path_length": 2.94},
@@ -73,9 +86,14 @@ SYSTEMS = {
         particles=13,
         dimensions=3,
         energy=lj_energy,
-        osf_url="https://osf.io/download/bd9fg/",
-        sha256="1566627762bf925a70e25d1b36da19d0fac3e2b5b86599f06e0c1c013bde6db7",
-        source_shape=(10_000_000, 39),
+        sources=(
+            DatasetSource(
+                filename="all_data_LJ13-1000.npy",
+                url="https://osf.io/download/bd9fg/",
+                sha256="1566627762bf925a70e25d1b36da19d0fac3e2b5b86599f06e0c1c013bde6db7",
+                shape=(10_000_000, 39),
+            ),
+        ),
         paper_reference={
             "likelihood": {"nll": -15.83, "ess_percent": 39.78, "path_length": 5.08},
             "ot_flow_matching": {"nll": -16.09, "ess_percent": 54.36, "path_length": 2.84},
@@ -85,6 +103,27 @@ SYSTEMS = {
                 "path_length": 2.15,
             },
         },
+    ),
+    "lj55": ParticleSystem(
+        name="lj55",
+        particles=55,
+        dimensions=3,
+        energy=lj_energy,
+        sources=(
+            DatasetSource(
+                filename="all_data_LJ55-1000-part1.npy",
+                url="https://osf.io/download/w9fu6/",
+                sha256="dfb261fa0fde0a83083b7bb96c94538e828f36ea1f64d2021288b7c34502c94b",
+                shape=(5_000_000, 165),
+            ),
+            DatasetSource(
+                filename="all_data_LJ55-1000-part2.npy",
+                url="https://osf.io/download/9rv6z/",
+                sha256="a8e3262785e0826615396ffbe5834e1d41a594d9efeac2e7e6e433694dc980bc",
+                shape=(5_000_000, 165),
+            ),
+        ),
+        paper_reference={},
     ),
 }
 

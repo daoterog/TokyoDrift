@@ -151,6 +151,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.uv-bin/
 env/
 venv/
 ENV/
@@ -220,3 +221,9 @@ __marimo__/
 artifacts/
 
 data/
+
+models/
+
+results/
+
+*.out

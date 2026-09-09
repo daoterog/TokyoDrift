@@ -13,9 +13,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .drift import UnnormalizedDrift, descriptor_whitening, median_bandwidth
 from .io import build_model, device_summary, load_config, load_dataset, select_device
 from .systems import get_system
+from .unnormalized_drifting import DirectCoordinateDrift, median_bandwidth
 from .validation import ValidationEvaluator
 
 
@@ -62,7 +62,7 @@ class EnergyStratifiedReferenceSampler:
 
 
 def bandwidth_scale(training: dict, step: int) -> float:
-    """Return the cosine-annealed descriptor bandwidth multiplier."""
+    """Return the cosine-annealed coordinate bandwidth multiplier."""
     start_scale = float(training.get("bandwidth_scale_start", training.get("bandwidth_scale", 1.0)))
     end_scale = float(training.get("bandwidth_scale_end", start_scale))
     anneal_start = int(training.get("bandwidth_anneal_start", 0))
@@ -125,12 +125,6 @@ def arguments() -> argparse.Namespace:
         default=None,
         help="Strictly increasing energy quantiles defining stratification boundaries.",
     )
-    parser.add_argument(
-        "--energy-feature-scale",
-        type=float,
-        default=None,
-        help="Append standardized potential energy to the invariant kernel descriptor.",
-    )
     parser.add_argument("--seed", type=int, default=None, help="Override config seed.")
     parser.add_argument("--output", type=Path, default=None, help="Override output directory.")
     parser.add_argument("--resume", type=Path, default=None, help="Resume a training checkpoint.")
@@ -176,6 +170,14 @@ def main() -> None:
     """Run unnormalized-drift training from a JSON configuration."""
     args = arguments()
     config = load_config(args.config)
+    drift_definition = {
+        "space": "particle_coordinates",
+        "kernel": "gaussian",
+        "normalized": False,
+    }
+    configured_drift = config.setdefault("drift", drift_definition)
+    if configured_drift != drift_definition:
+        raise ValueError(f"this training pipeline requires drift={drift_definition}")
     if args.steps is not None:
         config["training"]["steps"] = args.steps
     if args.batch_size is not None:
@@ -186,8 +188,6 @@ def main() -> None:
         config["training"]["positive_reference_sampling"] = args.positive_reference_sampling
     if args.positive_reference_energy_quantiles is not None:
         config["training"]["positive_reference_energy_quantiles"] = args.positive_reference_energy_quantiles
-    if args.energy_feature_scale is not None:
-        config["training"]["energy_feature_scale"] = args.energy_feature_scale
     if args.seed is not None:
         config["seed"] = args.seed
     if args.output is not None:
@@ -233,6 +233,8 @@ def main() -> None:
             raise ValueError("resume checkpoint and config systems differ")
         if checkpoint_config["model"] != config["model"]:
             raise ValueError("resume checkpoint and config model definitions differ")
+        if checkpoint_config.get("drift") != drift_definition:
+            raise ValueError("resume checkpoint was not trained with direct-coordinate drift")
         model.load_state_dict(checkpoint["model"])
         ema.load_state_dict(checkpoint["ema"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -240,38 +242,9 @@ def main() -> None:
             group["lr"] = float(training["learning_rate"])
             group["weight_decay"] = float(training["weight_decay"])
         start_step = int(checkpoint["step"]) + 1
-    preconditioning = str(training.get("descriptor_preconditioning", "none"))
-    if preconditioning == "none":
-        descriptor_mean = None
-        descriptor_whitener = None
-    elif preconditioning == "whitened":
-        descriptor_mean, descriptor_whitener = descriptor_whitening(
-            train_data,
-            shrinkage=float(training.get("whitening_shrinkage", 0.1)),
-            ridge=float(training.get("whitening_ridge", 1e-4)),
-        )
-    else:
-        raise ValueError("descriptor_preconditioning must be 'none' or 'whitened'")
-    energy_feature_scale = float(training.get("energy_feature_scale", 0.0))
-    if energy_feature_scale and preconditioning != "none":
-        raise ValueError("energy augmentation cannot currently be combined with descriptor whitening")
-    energy_mean = None
-    energy_standard_deviation = None
-    if energy_feature_scale:
-        train_energy = system.energy(train_data)
-        energy_mean = train_energy.mean()
-        energy_standard_deviation = train_energy.std().clamp_min(1e-6)
     bandwidth_config = training["bandwidth"]
     base_bandwidth = (
-        median_bandwidth(
-            train_data,
-            descriptor_mean=descriptor_mean,
-            descriptor_whitener=descriptor_whitener,
-            energy_function=system.energy,
-            energy_mean=energy_mean,
-            energy_standard_deviation=energy_standard_deviation,
-            energy_feature_scale=energy_feature_scale,
-        )
+        median_bandwidth(train_data)
         if bandwidth_config == "auto"
         else float(bandwidth_config)
     )
@@ -279,22 +252,7 @@ def main() -> None:
     final_scale = bandwidth_scale(training, int(training["steps"]))
     initial_bandwidth = base_bandwidth * initial_scale
     final_bandwidth = base_bandwidth * final_scale
-    broad_bandwidth = base_bandwidth * float(training.get("broad_bandwidth_scale", 0.0))
-    drift = UnnormalizedDrift(
-        initial_bandwidth,
-        kernel=str(training.get("kernel", "gaussian")),
-        imq_beta=float(training.get("imq_beta", 0.5)),
-        descriptor_mean=descriptor_mean,
-        descriptor_whitener=descriptor_whitener,
-        broad_bandwidth=broad_bandwidth or None,
-        broad_weight=float(training.get("broad_kernel_weight", 0.0)),
-        minimum_bandwidth=training.get("minimum_distance_bandwidth"),
-        minimum_weight=float(training.get("minimum_distance_kernel_weight", 0.0)),
-        energy_function=system.energy,
-        energy_mean=energy_mean,
-        energy_standard_deviation=energy_standard_deviation,
-        energy_feature_scale=energy_feature_scale,
-    ).to(device)
+    drift = DirectCoordinateDrift(initial_bandwidth).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "iid"))
@@ -308,39 +266,28 @@ def main() -> None:
         raise ValueError("positive_reference_sampling must be 'iid' or 'energy-stratified'")
     outdir = Path(config["output"])
     outdir.mkdir(parents=True, exist_ok=True)
-    with (outdir / "resolved_config.json").open("w") as stream:
-        json.dump(
+    resolved_parameters = {
+        **config,
+        "base_bandwidth": base_bandwidth,
+        "initial_bandwidth": initial_bandwidth,
+        "final_bandwidth": final_bandwidth,
+        "reference_radius": reference_radius,
+        "minimum_radius": minimum_radius,
+        "positive_reference_sampler": (
             {
-                **config,
-                "base_bandwidth": base_bandwidth,
-                "initial_bandwidth": initial_bandwidth,
-                "final_bandwidth": final_bandwidth,
-                "broad_bandwidth": broad_bandwidth or None,
-                "reference_radius": reference_radius,
-                "minimum_radius": minimum_radius,
-                "energy_feature": {
-                    "scale": energy_feature_scale,
-                    "mean": float(energy_mean) if energy_mean is not None else None,
-                    "standard_deviation": (
-                        float(energy_standard_deviation)
-                        if energy_standard_deviation is not None
-                        else None
-                    ),
-                },
-                "positive_reference_sampler": (
-                    {
-                        "type": "energy-stratified",
-                        "energy_quantiles": quantiles,
-                        "energy_boundaries": stratified_references.boundaries.tolist(),
-                        "bin_masses": stratified_references.bin_masses.tolist(),
-                    }
-                    if stratified_references is not None
-                    else {"type": "iid"}
-                ),
-            },
-            stream,
-            indent=2,
-        )
+                "type": "energy-stratified",
+                "energy_quantiles": quantiles,
+                "energy_boundaries": stratified_references.boundaries.tolist(),
+                "bin_masses": stratified_references.bin_masses.tolist(),
+            }
+            if stratified_references is not None
+            else {"type": "iid"}
+        ),
+    }
+    serialized_parameters = json.dumps(resolved_parameters, indent=2) + "\n"
+    (outdir / "parameters.json").write_text(serialized_parameters)
+    # Keep the established filename for compatibility with existing tooling.
+    (outdir / "resolved_config.json").write_text(serialized_parameters)
 
     batch_size = int(training["batch_size"])
     references = int(training["positive_references"])
@@ -368,7 +315,7 @@ def main() -> None:
                 "base_bandwidth": base_bandwidth,
                 "initial_bandwidth": initial_bandwidth,
                 "final_bandwidth": final_bandwidth,
-                "broad_bandwidth": broad_bandwidth or None,
+                "drift_space": "particle_coordinates",
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,
                 "resume": str(args.resume) if args.resume is not None else None,

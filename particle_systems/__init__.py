@@ -1,7 +1,17 @@
-"""Unnormalized-drift experiments for invariant particle systems."""
+"""Direct-coordinate unnormalized-drift experiments for particle systems."""
 
-from .drift import UnnormalizedDrift
 from .model import ParticleGenerator
-from .systems import SYSTEMS, ParticleSystem, get_system
+from .systems import SYSTEMS, DatasetSource, ParticleSystem, get_system
+from .unnormalized_drifting import DirectCoordinateDrift
 
-__all__ = ["SYSTEMS", "ParticleGenerator", "ParticleSystem", "UnnormalizedDrift", "get_system"]
+UnnormalizedDrift = DirectCoordinateDrift
+
+__all__ = [
+    "SYSTEMS",
+    "DatasetSource",
+    "DirectCoordinateDrift",
+    "ParticleGenerator",
+    "ParticleSystem",
+    "UnnormalizedDrift",
+    "get_system",
+]
