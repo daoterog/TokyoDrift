@@ -10,7 +10,12 @@ from particle_systems.model import ParticleGenerator
 from particle_systems.prepare_data import select_rows
 from particle_systems.systems import center, dw4_energy, get_system, lj_energy
 from particle_systems.toys.gmm40 import GMM40, metrics
-from particle_systems.train import EnergyStratifiedReferenceSampler, bandwidth_scale, learning_rate
+from particle_systems.train import (
+    EnergyStratifiedReferenceSampler,
+    bandwidth_scale,
+    epoch_reference_batches,
+    learning_rate,
+)
 from particle_systems.unnormalized_drifting import DirectCoordinateDrift, median_bandwidth
 
 
@@ -74,14 +79,17 @@ class GMMTests(unittest.TestCase):
 
 
 class ReferenceSamplingTests(unittest.TestCase):
-    def test_stratified_sampler_returns_unbiased_normalized_weights(self) -> None:
+    def test_full_epoch_batches_visit_every_reference_once(self) -> None:
+        batches = epoch_reference_batches(10, 4, torch.Generator().manual_seed(9))
+        self.assertEqual([len(batch) for batch in batches], [4, 4, 2])
+        self.assertEqual(torch.cat(batches).sort().values.tolist(), list(range(10)))
+
+    def test_stratified_epoch_batches_visit_every_reference_once(self) -> None:
         torch.manual_seed(13)
         samples = center(torch.randn(40, 4, 2))
         sampler = EnergyStratifiedReferenceSampler.build(samples, get_system("dw4"), [0.5, 0.9])
-        references, weights = sampler.sample(12, torch.Generator().manual_seed(9))
-        self.assertEqual(len(references), 12)
-        self.assertTrue(torch.isclose(weights.sum(), torch.tensor(1.0)))
-        self.assertTrue(torch.all(weights > 0))
+        batches = sampler.epoch_batches(12, torch.Generator().manual_seed(9))
+        self.assertEqual(torch.cat(batches).sort().values.tolist(), list(range(40)))
 
     def test_uniform_positive_weights_match_the_empirical_mean_field(self) -> None:
         query = center(torch.randn(2, 4, 2))

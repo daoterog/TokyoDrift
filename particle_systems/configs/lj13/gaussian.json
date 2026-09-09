@@ -16,15 +16,15 @@
     "max_distance": 4.0
   },
   "training": {
-    "steps": 100000,
+    "epochs": 256,
     "batch_size": 256,
     "positive_references": 256,
     "coordinate_noise_scale": 1.0,
     "bandwidth": "auto",
     "bandwidth_scale_start": 1.5,
     "bandwidth_scale_end": 0.5,
-    "bandwidth_anneal_start": 30000,
-    "bandwidth_anneal_end": 100000,
+    "bandwidth_anneal_start": 77,
+    "bandwidth_anneal_end": 256,
     "eta": 0.2,
     "repulsion": 1.0,
     "min_radius_fraction": 0.25,
@@ -32,7 +32,7 @@
     "weight_decay": 0.0001,
     "gradient_clip": 1.0,
     "ema_decay": 0.999,
-    "log_every": 100,
-    "checkpoint_every": 10000
+    "log_every": 1,
+    "checkpoint_every": 26
   }
 }

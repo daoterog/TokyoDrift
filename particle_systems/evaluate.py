@@ -321,6 +321,9 @@ def main() -> None:
         "system": system.name,
         "checkpoint": str(args.checkpoint),
         "checkpoint_step": int(checkpoint["step"]),
+        "checkpoint_epoch": (
+            int(checkpoint["epoch"]) if "epoch" in checkpoint else None
+        ),
         "num_generated_samples": args.num_samples,
         "num_test_samples": len(reference),
         "runtime": device_summary(device),

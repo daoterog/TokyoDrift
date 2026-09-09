@@ -55,6 +55,13 @@ uv run --project particle_systems --no-sync python -m particle_systems.train \
 
 Every run must use its own `artifacts/runs/...` directory. Do not run or resume two processes against the same directory.
 
+Training is measured in full epochs. At the start of every epoch, the training references are
+reshuffled and divided into batches without replacement; the final partial batch is retained, so
+every training configuration contributes exactly once per epoch. `positive_references` controls
+the reference-batch size, while `batch_size` controls how many generated configurations are
+updated against each reference batch. Logging, validation, learning-rate and bandwidth schedules,
+and checkpoint intervals are all expressed in epochs.
+
 The large DW4 configuration can be trained and evaluated in one GPU job:
 
 ```bash
