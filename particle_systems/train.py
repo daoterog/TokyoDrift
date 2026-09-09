@@ -162,7 +162,7 @@ def save_checkpoint(
     ema: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     config: dict,
-    bandwidth: float,
+    bandwidth: float | list[float],
     epoch: int,
     global_step: int,
     generator: torch.Generator,
@@ -295,15 +295,25 @@ def main() -> None:
         elif device.type == "mps" and "mps_rng" in checkpoint:
             torch.mps.set_rng_state(checkpoint["mps_rng"])
     bandwidth_config = training["bandwidth"]
-    base_bandwidth = (
-        median_bandwidth(train_data)
-        if bandwidth_config == "auto"
-        else float(bandwidth_config)
-    )
+    if bandwidth_config == "auto":
+        base_bandwidths = (median_bandwidth(train_data),)
+    elif isinstance(bandwidth_config, list):
+        base_bandwidths = tuple(float(value) for value in bandwidth_config)
+    else:
+        base_bandwidths = (float(bandwidth_config),)
     initial_scale = bandwidth_scale(training, 1)
     final_scale = bandwidth_scale(training, epochs)
-    initial_bandwidth = base_bandwidth * initial_scale
-    final_bandwidth = base_bandwidth * final_scale
+    initial_bandwidths = tuple(value * initial_scale for value in base_bandwidths)
+    final_bandwidths = tuple(value * final_scale for value in base_bandwidths)
+    base_bandwidth: float | list[float] = (
+        base_bandwidths[0] if len(base_bandwidths) == 1 else list(base_bandwidths)
+    )
+    initial_bandwidth: float | list[float] = (
+        initial_bandwidths[0] if len(initial_bandwidths) == 1 else list(initial_bandwidths)
+    )
+    final_bandwidth: float | list[float] = (
+        final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
+    )
     drift = DirectCoordinateDrift(initial_bandwidth).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
@@ -388,7 +398,12 @@ def main() -> None:
         for group in optimizer.param_groups:
             group["lr"] = current_learning_rate
         current_scale = bandwidth_scale(training, epoch)
-        current_bandwidth = base_bandwidth * current_scale
+        current_bandwidths = tuple(value * current_scale for value in base_bandwidths)
+        current_bandwidth: float | list[float] = (
+            current_bandwidths[0]
+            if len(current_bandwidths) == 1
+            else list(current_bandwidths)
+        )
         drift.bandwidth = current_bandwidth
         if stratified_references is None:
             reference_batches = epoch_reference_batches(

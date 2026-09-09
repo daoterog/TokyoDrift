@@ -113,6 +113,32 @@ class DriftTests(unittest.TestCase):
         expected = torch.exp(torch.tensor(-1.0 / 8.0)) / 4.0
         self.assertTrue(torch.allclose(field.squeeze(), expected))
 
+    def test_multiple_bandwidths_average_their_fields_and_kernel_masses(self) -> None:
+        query = torch.tensor([[[0.0]]])
+        references = torch.tensor([[[1.0]], [[2.0]]])
+        bandwidths = (0.5, 1.0, 2.0)
+        combined_field, combined_metrics = DirectCoordinateDrift(bandwidths)(
+            query, references, repulsion=0.0
+        )
+        individual = [
+            DirectCoordinateDrift(bandwidth)(query, references, repulsion=0.0)
+            for bandwidth in bandwidths
+        ]
+        expected_field = torch.stack([field for field, _ in individual]).mean(dim=0)
+        expected_mass = torch.stack(
+            [metrics["positive_kernel_mass"] for _, metrics in individual]
+        ).mean()
+        self.assertTrue(torch.allclose(combined_field, expected_field))
+        self.assertTrue(
+            torch.allclose(combined_metrics["positive_kernel_mass"], expected_mass)
+        )
+
+    def test_multiple_bandwidths_must_be_nonempty_and_positive(self) -> None:
+        with self.assertRaises(ValueError):
+            DirectCoordinateDrift([])
+        with self.assertRaises(ValueError):
+            DirectCoordinateDrift([0.5, 0.0])
+
     def test_auto_bandwidth_uses_flattened_coordinate_distance(self) -> None:
         samples = torch.tensor([[[0.0]], [[3.0]], [[7.0]]])
         self.assertEqual(median_bandwidth(samples), 4.0)

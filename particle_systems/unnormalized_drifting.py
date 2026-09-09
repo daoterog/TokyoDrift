@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 
@@ -22,12 +25,17 @@ def median_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> float:
 
 
 class DirectCoordinateDrift(nn.Module):
-    """Gaussian density-gradient drift without invariant descriptors.
+    """Multi-bandwidth Gaussian density-gradient drift without invariant descriptors.
 
     For a query configuration ``x`` and reference configurations ``y_j``, the
-    attractive field is the gradient of the empirical Gaussian kernel density:
+    attractive field at bandwidth ``h`` is the gradient of the empirical
+    Gaussian kernel density:
 
-    ``mean_j[k(x, y_j) * (y_j - x) / bandwidth**2]``.
+    ``mean_j[k_h(x, y_j) * (y_j - x) / h**2]``.
+
+    When multiple bandwidths are supplied, their fields and kernel-mass
+    diagnostics are averaged with equal weight. A scalar remains supported as
+    the single-bandwidth case.
 
     No division by the local kernel mass is performed. Consequently, this is an
     unnormalized density gradient rather than a KDE score. Coordinates are
@@ -35,12 +43,31 @@ class DirectCoordinateDrift(nn.Module):
     must be meaningful and consistent across configurations.
     """
 
-    def __init__(self, bandwidth: float) -> None:
+    def __init__(self, bandwidth: float | Sequence[float]) -> None:
         """Initialize a direct-coordinate Gaussian drift."""
         super().__init__()
-        if bandwidth <= 0:
-            raise ValueError("bandwidth must be positive")
-        self.bandwidth = float(bandwidth)
+        self.bandwidth = bandwidth
+
+    @property
+    def bandwidth(self) -> float | tuple[float, ...]:
+        """Return one bandwidth as a scalar and multiple bandwidths as a tuple."""
+        if len(self._bandwidths) == 1:
+            return self._bandwidths[0]
+        return self._bandwidths
+
+    @bandwidth.setter
+    def bandwidth(self, bandwidth: float | Sequence[float]) -> None:
+        if isinstance(bandwidth, (int, float)):
+            values = (float(bandwidth),)
+        else:
+            if isinstance(bandwidth, (str, bytes)):
+                raise TypeError("bandwidth must be a number or a sequence of numbers")
+            values = tuple(float(value) for value in bandwidth)
+        if not values:
+            raise ValueError("at least one bandwidth is required")
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            raise ValueError("bandwidths must be finite and positive")
+        self._bandwidths = values
 
     @staticmethod
     def _validate_inputs(query: torch.Tensor, references: torch.Tensor) -> None:
@@ -65,8 +92,7 @@ class DirectCoordinateDrift(nn.Module):
         self._validate_inputs(query, references)
         residual = references.unsqueeze(0) - query.unsqueeze(1)
         squared_distance = residual.flatten(start_dim=2).square().sum(dim=-1)
-        kernel = torch.exp(-squared_distance / (2.0 * self.bandwidth**2))
-
+        keep = None
         if self_indices is not None:
             if self_indices.shape != (len(query),):
                 raise ValueError("self_indices must have one entry per query")
@@ -75,14 +101,10 @@ class DirectCoordinateDrift(nn.Module):
             valid = self_indices >= 0
             if torch.any(self_indices[valid] >= len(references)):
                 raise ValueError("self index is outside the reference bank")
-            keep = torch.ones_like(kernel)
+            keep = torch.ones_like(squared_distance)
             rows = torch.arange(len(query), device=query.device)[valid]
             keep[rows, self_indices[valid]] = 0.0
-            kernel = kernel * keep
-
-        if reference_weights is None:
-            weighted_kernel = kernel / len(references)
-        else:
+        if reference_weights is not None:
             if reference_weights.shape != (len(references),):
                 raise ValueError("reference_weights must have one entry per reference")
             if reference_weights.device != references.device:
@@ -92,10 +114,23 @@ class DirectCoordinateDrift(nn.Module):
             expected = torch.ones((), dtype=reference_weights.dtype, device=references.device)
             if not torch.isclose(reference_weights.sum(), expected):
                 raise ValueError("reference_weights must sum to one")
-            weighted_kernel = kernel * reference_weights.unsqueeze(0)
 
-        field = (weighted_kernel[..., None, None] * residual).sum(dim=1) / self.bandwidth**2
-        return field, weighted_kernel.sum(dim=1)
+        fields = []
+        masses = []
+        for bandwidth in self._bandwidths:
+            kernel = torch.exp(-squared_distance / (2.0 * bandwidth**2))
+            if keep is not None:
+                kernel = kernel * keep
+            if reference_weights is None:
+                weighted_kernel = kernel / len(references)
+            else:
+                weighted_kernel = kernel * reference_weights.unsqueeze(0)
+            fields.append(
+                (weighted_kernel[..., None, None] * residual).sum(dim=1) / bandwidth**2
+            )
+            masses.append(weighted_kernel.sum(dim=1))
+
+        return torch.stack(fields).mean(dim=0), torch.stack(masses).mean(dim=0)
 
     def forward(
         self,

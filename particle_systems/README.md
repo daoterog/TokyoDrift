@@ -62,6 +62,11 @@ the reference-batch size, while `batch_size` controls how many generated configu
 updated against each reference batch. Logging, validation, learning-rate and bandwidth schedules,
 and checkpoint intervals are all expressed in epochs.
 
+`training.bandwidth` accepts a positive number, `"auto"` for the median-distance heuristic, or a
+nonempty list of positive numbers. With a list, the drift and kernel-mass diagnostics are the
+equal-weight averages of the independently computed Gaussian fields. Bandwidth schedules, when
+present, multiply every value in the list by the same epoch-dependent scale.
+
 The large DW4 configuration can be trained and evaluated in one GPU job:
 
 ```bash
