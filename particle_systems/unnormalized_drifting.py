@@ -33,9 +33,11 @@ class DirectCoordinateDrift(nn.Module):
 
     ``mean_j[k_h(x, y_j) * (y_j - x) / h**2]``.
 
-    When multiple bandwidths are supplied, their fields and kernel-mass
-    diagnostics are averaged with equal weight. A scalar remains supported as
-    the single-bandwidth case.
+    When multiple bandwidths are supplied, each complete attraction-minus-
+    repulsion field is normalized by its RMS magnitude before the fields are
+    averaged with equal weight. Kernel-mass diagnostics are averaged without
+    normalization. A scalar remains supported as the original unnormalized
+    single-bandwidth case.
 
     No division by the local kernel mass is performed. Consequently, this is an
     unnormalized density gradient rather than a KDE score. Coordinates are
@@ -81,14 +83,14 @@ class DirectCoordinateDrift(nn.Module):
             raise ValueError("query and references must be on the same device")
 
     @torch.no_grad()
-    def _field(
+    def _fields(
         self,
         query: torch.Tensor,
         references: torch.Tensor,
         self_indices: torch.Tensor | None = None,
         reference_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return a Gaussian density gradient and its mean kernel mass."""
+        """Return one Gaussian density gradient and kernel mass per bandwidth."""
         self._validate_inputs(query, references)
         residual = references.unsqueeze(0) - query.unsqueeze(1)
         squared_distance = residual.flatten(start_dim=2).square().sum(dim=-1)
@@ -130,7 +132,19 @@ class DirectCoordinateDrift(nn.Module):
             )
             masses.append(weighted_kernel.sum(dim=1))
 
-        return torch.stack(fields).mean(dim=0), torch.stack(masses).mean(dim=0)
+        return torch.stack(fields), torch.stack(masses)
+
+    @torch.no_grad()
+    def _field(
+        self,
+        query: torch.Tensor,
+        references: torch.Tensor,
+        self_indices: torch.Tensor | None = None,
+        reference_weights: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return bandwidth-averaged raw field and kernel mass diagnostics."""
+        fields, masses = self._fields(query, references, self_indices, reference_weights)
+        return fields.mean(dim=0), masses.mean(dim=0)
 
     def forward(
         self,
@@ -144,23 +158,32 @@ class DirectCoordinateDrift(nn.Module):
         """Return data attraction minus generated-sample repulsion."""
         if repulsion < 0:
             raise ValueError("repulsion must be non-negative")
-        positive, positive_mass = self._field(
+        positive_fields, positive_masses = self._fields(
             generated, positive_references, reference_weights=positive_weights
         )
         if negative_references is None:
             negative_references = generated
         if self_indices is None and negative_references is generated:
             self_indices = torch.arange(len(generated), device=generated.device)
-        negative, negative_mass = self._field(
+        negative_fields, negative_masses = self._fields(
             generated, negative_references, self_indices=self_indices
         )
-        drift = positive - repulsion * negative
+        fields = positive_fields - repulsion * negative_fields
+        temperature_rms = fields.square().mean(dim=(1, 2, 3)).sqrt()
+        if len(self._bandwidths) > 1:
+            fields = fields / temperature_rms.clamp_min(1e-8)[:, None, None, None]
+        drift = fields.mean(dim=0)
+        positive = positive_fields.mean(dim=0)
+        negative = negative_fields.mean(dim=0)
         return drift, {
             "drift_rms": drift.square().mean().sqrt(),
             "positive_field_rms": positive.square().mean().sqrt(),
             "negative_field_rms": negative.square().mean().sqrt(),
-            "positive_kernel_mass": positive_mass.mean(),
-            "negative_kernel_mass": negative_mass.mean(),
+            "temperature_field_rms_mean": temperature_rms.mean(),
+            "temperature_field_rms_min": temperature_rms.min(),
+            "temperature_field_rms_max": temperature_rms.max(),
+            "positive_kernel_mass": positive_masses.mean(),
+            "negative_kernel_mass": negative_masses.mean(),
         }
 
     def step(

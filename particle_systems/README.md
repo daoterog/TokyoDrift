@@ -63,9 +63,11 @@ updated against each reference batch. Logging, validation, learning-rate and ban
 and checkpoint intervals are all expressed in epochs.
 
 `training.bandwidth` accepts a positive number, `"auto"` for the median-distance heuristic, or a
-nonempty list of positive numbers. With a list, the drift and kernel-mass diagnostics are the
-equal-weight averages of the independently computed Gaussian fields. Bandwidth schedules, when
-present, multiply every value in the list by the same epoch-dependent scale.
+nonempty list of positive numbers. With a list, each attraction-minus-repulsion Gaussian field is
+RMS-normalized before the fields are averaged with equal weight; kernel-mass diagnostics remain
+raw averages. Bandwidth schedules, when present, multiply every value in the list by the same
+epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate, checkpoint, and
+evaluate without EMA weights; `1.0` is rejected because it would freeze EMA at initialization.
 
 The large DW4 configuration can be trained and evaluated in one GPU job:
 

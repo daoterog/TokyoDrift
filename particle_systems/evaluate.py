@@ -307,7 +307,9 @@ def main() -> None:
     if metadata["system"] != system.name:
         raise ValueError("checkpoint and test dataset systems differ")
     model = build_model(config).to(device).eval()
-    model.load_state_dict(checkpoint["ema"])
+    ema_state = checkpoint.get("ema")
+    model.load_state_dict(ema_state if ema_state is not None else checkpoint["model"])
+    evaluated_weights = "ema" if ema_state is not None else "model"
     generated, endpoint_distance = generate(
         model,
         system.name,
@@ -324,6 +326,7 @@ def main() -> None:
         "checkpoint_epoch": (
             int(checkpoint["epoch"]) if "epoch" in checkpoint else None
         ),
+        "evaluated_weights": evaluated_weights,
         "num_generated_samples": args.num_samples,
         "num_test_samples": len(reference),
         "runtime": device_summary(device),

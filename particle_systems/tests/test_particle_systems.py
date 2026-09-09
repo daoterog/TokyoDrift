@@ -15,6 +15,7 @@ from particle_systems.train import (
     bandwidth_scale,
     epoch_reference_batches,
     learning_rate,
+    resolve_ema_decay,
 )
 from particle_systems.unnormalized_drifting import DirectCoordinateDrift, median_bandwidth
 
@@ -113,9 +114,9 @@ class DriftTests(unittest.TestCase):
         expected = torch.exp(torch.tensor(-1.0 / 8.0)) / 4.0
         self.assertTrue(torch.allclose(field.squeeze(), expected))
 
-    def test_multiple_bandwidths_average_their_fields_and_kernel_masses(self) -> None:
-        query = torch.tensor([[[0.0]]])
-        references = torch.tensor([[[1.0]], [[2.0]]])
+    def test_multiple_bandwidths_normalize_and_average_their_fields(self) -> None:
+        query = torch.tensor([[[0.0]], [[0.5]]])
+        references = torch.tensor([[[1.0]], [[2.0]], [[3.0]]])
         bandwidths = (0.5, 1.0, 2.0)
         combined_field, combined_metrics = DirectCoordinateDrift(bandwidths)(
             query, references, repulsion=0.0
@@ -124,7 +125,11 @@ class DriftTests(unittest.TestCase):
             DirectCoordinateDrift(bandwidth)(query, references, repulsion=0.0)
             for bandwidth in bandwidths
         ]
-        expected_field = torch.stack([field for field, _ in individual]).mean(dim=0)
+        individual_fields = torch.stack([field for field, _ in individual])
+        individual_rms = individual_fields.square().mean(dim=(1, 2, 3)).sqrt()
+        expected_field = (
+            individual_fields / individual_rms[:, None, None, None]
+        ).mean(dim=0)
         expected_mass = torch.stack(
             [metrics["positive_kernel_mass"] for _, metrics in individual]
         ).mean()
@@ -132,12 +137,24 @@ class DriftTests(unittest.TestCase):
         self.assertTrue(
             torch.allclose(combined_metrics["positive_kernel_mass"], expected_mass)
         )
+        self.assertTrue(
+            torch.allclose(combined_metrics["temperature_field_rms_mean"], individual_rms.mean())
+        )
 
     def test_multiple_bandwidths_must_be_nonempty_and_positive(self) -> None:
         with self.assertRaises(ValueError):
             DirectCoordinateDrift([])
         with self.assertRaises(ValueError):
             DirectCoordinateDrift([0.5, 0.0])
+
+    def test_zero_field_at_one_temperature_does_not_produce_nan(self) -> None:
+        query = torch.tensor([[[0.0]]])
+        references = torch.tensor([[[10.0]]])
+        field, metrics = DirectCoordinateDrift([1e-6, 10.0])(
+            query, references, repulsion=0.0
+        )
+        self.assertTrue(torch.isfinite(field).all())
+        self.assertTrue(torch.isfinite(metrics["drift_rms"]))
 
     def test_auto_bandwidth_uses_flattened_coordinate_distance(self) -> None:
         samples = torch.tensor([[[0.0]], [[3.0]], [[7.0]]])
@@ -227,6 +244,12 @@ class BandwidthScheduleTests(unittest.TestCase):
         self.assertEqual(learning_rate(training, 10), 2e-5)
         self.assertAlmostEqual(learning_rate(training, 20), 1.1e-5)
         self.assertEqual(learning_rate(training, 30), 2e-6)
+
+    def test_ema_can_be_disabled_with_null_but_not_decay_one(self) -> None:
+        self.assertIsNone(resolve_ema_decay({"ema_decay": None}))
+        self.assertEqual(resolve_ema_decay({"ema_decay": 0.999}), 0.999)
+        with self.assertRaises(ValueError):
+            resolve_ema_decay({"ema_decay": 1.0})
 
 
 class ModelTests(unittest.TestCase):

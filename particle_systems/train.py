@@ -112,6 +112,17 @@ def learning_rate(training: dict, epoch: int) -> float:
     return end + (start - end) * cosine_weight
 
 
+def resolve_ema_decay(training: dict) -> float | None:
+    """Return an EMA decay, or None when EMA is explicitly disabled."""
+    configured = training.get("ema_decay", 0.999)
+    if configured is None:
+        return None
+    decay = float(configured)
+    if not 0.0 <= decay < 1.0:
+        raise ValueError("ema_decay must be in [0, 1), or null to disable EMA")
+    return decay
+
+
 def arguments() -> argparse.Namespace:
     """Parse training command-line arguments."""
     parser = argparse.ArgumentParser(description="Train an unnormalized-drift generator.")
@@ -159,7 +170,7 @@ def update_ema(ema: torch.nn.Module, model: torch.nn.Module, decay: float) -> No
 def save_checkpoint(
     path: Path,
     model: torch.nn.Module,
-    ema: torch.nn.Module,
+    ema: torch.nn.Module | None,
     optimizer: torch.optim.Optimizer,
     config: dict,
     bandwidth: float | list[float],
@@ -171,7 +182,8 @@ def save_checkpoint(
     torch.save(
         {
             "model": model.state_dict(),
-            "ema": ema.state_dict(),
+            "ema": ema.state_dict() if ema is not None else None,
+            "ema_enabled": ema is not None,
             "optimizer": optimizer.state_dict(),
             "config": config,
             "bandwidth": bandwidth,
@@ -231,8 +243,9 @@ def main() -> None:
     if metadata["system"] != system.name:
         raise ValueError("config and dataset systems differ")
     model = build_model(config).to(device)
-    ema = copy.deepcopy(model).eval()
     training = config["training"]
+    ema_decay = resolve_ema_decay(training)
+    ema = copy.deepcopy(model).eval() if ema_decay is not None else None
     if "steps" in training:
         raise ValueError("training.steps has been replaced by training.epochs")
     validation_holdout = int(training.get("validation_holdout", 0))
@@ -279,7 +292,9 @@ def main() -> None:
         if checkpoint_config.get("drift") != drift_definition:
             raise ValueError("resume checkpoint was not trained with direct-coordinate drift")
         model.load_state_dict(checkpoint["model"])
-        ema.load_state_dict(checkpoint["ema"])
+        if ema is not None:
+            ema_state = checkpoint.get("ema")
+            ema.load_state_dict(ema_state if ema_state is not None else checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         for group in optimizer.param_groups:
             group["lr"] = float(training["learning_rate"])
@@ -340,6 +355,7 @@ def main() -> None:
         "final_bandwidth": final_bandwidth,
         "reference_radius": reference_radius,
         "minimum_radius": minimum_radius,
+        "ema_enabled": ema is not None,
         "positive_reference_sampler": (
             {
                 "type": "energy-stratified-full-epoch",
@@ -382,6 +398,7 @@ def main() -> None:
                 "drift_space": "particle_coordinates",
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,
+                "ema_enabled": ema is not None,
                 "training_samples": len(train_data),
                 "batches_per_epoch": batches_per_epoch,
                 "epochs": epochs,
@@ -444,7 +461,8 @@ def main() -> None:
                 model.parameters(), float(training["gradient_clip"])
             )
             optimizer.step()
-            update_ema(ema, model, float(training["ema_decay"]))
+            if ema is not None:
+                update_ema(ema, model, ema_decay)
             global_step += 1
 
             with torch.no_grad():
@@ -475,7 +493,8 @@ def main() -> None:
             }
             print(json.dumps(record))
         if validator is not None and (epoch % validation_every == 0 or epoch == epochs):
-            validation_metrics = validator.evaluate(ema, drift, device)
+            validation_model = ema if ema is not None else model
+            validation_metrics = validator.evaluate(validation_model, drift, device)
             validation_record = {
                 "epoch": epoch,
                 "global_step": global_step,

@@ -62,15 +62,20 @@ class ValidationEvaluator:
     @torch.no_grad()
     def generated_samples(self, model: torch.nn.Module, device: torch.device) -> torch.Tensor:
         """Generate the same validation samples for every checkpoint."""
+        was_training = model.training
+        model.eval()
         values: list[torch.Tensor] = []
-        for start in range(0, len(self.coordinate_noise), self.batch_size):
-            stop = start + self.batch_size
-            values.append(
-                model(
-                    self.coordinate_noise[start:stop].to(device),
-                    self.feature_noise[start:stop].to(device),
-                ).cpu()
-            )
+        try:
+            for start in range(0, len(self.coordinate_noise), self.batch_size):
+                stop = start + self.batch_size
+                values.append(
+                    model(
+                        self.coordinate_noise[start:stop].to(device),
+                        self.feature_noise[start:stop].to(device),
+                    ).cpu()
+                )
+        finally:
+            model.train(was_training)
         return torch.cat(values)
 
     def evaluate(
