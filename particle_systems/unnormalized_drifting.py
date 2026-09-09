@@ -25,23 +25,21 @@ def median_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> float:
 
 
 class DirectCoordinateDrift(nn.Module):
-    """Multi-bandwidth density-gradient drift without invariant descriptors.
+    """Multi-bandwidth radial-kernel drift without invariant descriptors.
 
-    The Gaussian and Laplacian kernels both include their probability-density
-    normalization in the effective centered-coordinate dimension
-    ``D = (particles - 1) * dimensions``. For bandwidth ``h``:
+    The Gaussian and Laplacian kernels omit bandwidth-dependent probability-
+    density prefactors. For bandwidth ``h``:
 
-    ``gaussian: k_h(x, y) = (2*pi*h**2)**(-D/2) * exp(-||x-y||**2 / (2*h**2))``
+    ``gaussian: k_h(x, y) = exp(-||x-y||**2 / (2*h**2))``
 
-    ``laplacian: k_h(x, y) = exp(-||x-y|| / h) / (S_(D-1) * Gamma(D) * h**D)``
+    ``laplacian: k_h(x, y) = exp(-||x-y|| / h)``
 
     The field is the gradient with respect to the query coordinates of the
     corresponding empirical kernel density.
 
-    When multiple bandwidths are supplied, each complete attraction-minus-
-    repulsion field is normalized by its RMS magnitude before the fields are
-    averaged with equal weight. Kernel-mass diagnostics are averaged without
-    normalization. A scalar remains supported as the original unnormalized
+    When multiple bandwidths are supplied, their complete attraction-minus-
+    repulsion fields are averaged with equal weight. Kernel-mass diagnostics
+    are averaged in the same way. A scalar remains supported as the
     single-bandwidth case.
 
     No division by the local kernel mass is performed. Consequently, this is an
@@ -105,7 +103,6 @@ class DirectCoordinateDrift(nn.Module):
         self._validate_inputs(query, references)
         residual = references.unsqueeze(0) - query.unsqueeze(1)
         squared_distance = residual.flatten(start_dim=2).square().sum(dim=-1)
-        effective_dimension = (query.shape[1] - 1) * query.shape[2]
         keep = None
         if self_indices is not None:
             if self_indices.shape != (len(query),):
@@ -133,26 +130,11 @@ class DirectCoordinateDrift(nn.Module):
         masses = []
         for bandwidth in self._bandwidths:
             if self.kernel == "gaussian":
-                log_normalizer = -0.5 * effective_dimension * math.log(
-                    2.0 * math.pi * bandwidth**2
-                )
-                kernel = torch.exp(
-                    -squared_distance / (2.0 * bandwidth**2) + log_normalizer
-                )
+                kernel = torch.exp(-squared_distance / (2.0 * bandwidth**2))
                 kernel_gradient = residual / bandwidth**2
             else:
-                if effective_dimension == 0:
-                    log_normalizer = 0.0
-                else:
-                    log_normalizer = (
-                        math.lgamma(0.5 * effective_dimension)
-                        - math.log(2.0)
-                        - 0.5 * effective_dimension * math.log(math.pi)
-                        - math.lgamma(effective_dimension)
-                        - effective_dimension * math.log(bandwidth)
-                    )
                 distance = squared_distance.sqrt()
-                kernel = torch.exp(-distance / bandwidth + log_normalizer)
+                kernel = torch.exp(-distance / bandwidth)
                 safe_distance = distance.clamp_min(torch.finfo(query.dtype).eps)
                 kernel_gradient = residual / (bandwidth * safe_distance[..., None, None])
             if keep is not None:
@@ -202,8 +184,6 @@ class DirectCoordinateDrift(nn.Module):
         )
         fields = positive_fields - repulsion * negative_fields
         temperature_rms = fields.square().mean(dim=(1, 2, 3)).sqrt()
-        if len(self._bandwidths) > 1:
-            fields = fields / temperature_rms.clamp_min(1e-8)[:, None, None, None]
         drift = fields.mean(dim=0)
         positive = positive_fields.mean(dim=0)
         negative = negative_fields.mean(dim=0)

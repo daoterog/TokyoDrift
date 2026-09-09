@@ -3,7 +3,7 @@
 #SBATCH --gpus=1
 #SBATCH --job-name=train-dw4
 #SBATCH --output=train-dw4-%j.out
-#SBATCH --time=4:00:00
+#SBATCH --time=1:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G

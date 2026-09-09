@@ -64,18 +64,18 @@ updated against each reference batch. Logging, validation, learning-rate and ban
 and checkpoint intervals are all expressed in epochs.
 
 `training.bandwidth` accepts a positive number, `"auto"` for the median-distance heuristic, or a
-nonempty list of positive numbers. With a list, each attraction-minus-repulsion kernel field is
-RMS-normalized before the fields are averaged with equal weight; kernel-mass diagnostics remain
-raw averages. Bandwidth schedules, when present, multiply every value in the list by the same
-epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate, checkpoint, and
-evaluate without EMA weights; `1.0` is rejected because it would freeze EMA at initialization.
-Every Gaussian includes the density normalizer in the effective mean-free coordinate dimension
-`(particles - 1) * dimensions`, so its integral over the centered configuration space is one.
+nonempty list of positive numbers. With a list, the raw attraction-minus-repulsion kernel fields
+are averaged with equal weight. Bandwidth schedules, when present, multiply every value in the
+list by the same epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate,
+checkpoint, and evaluate without EMA weights; `1.0` is rejected because it would freeze EMA at
+initialization.
+Gaussian and Laplacian kernels omit their bandwidth-dependent probability-density prefactors;
+their integrals therefore depend on bandwidth.
 The `drift.normalized: false` setting separately means that the density gradient is not divided by
 the local KDE mass (that is, the drift is not converted into a score).
-Set `drift.kernel` to either `"gaussian"` or `"laplacian"`. Both kernels are normalized to
-integrate to one on the centered configuration space and share the same scalar/list bandwidth,
-per-temperature field normalization, attraction/repulsion, logging, and checkpoint behavior.
+Set `drift.kernel` to either `"gaussian"` or `"laplacian"`. Both kernels share the same
+scalar/list bandwidth, raw field averaging, attraction/repulsion, logging, and checkpoint
+behavior.
 
 The large DW4 configuration can be trained and evaluated in one GPU job:
 
