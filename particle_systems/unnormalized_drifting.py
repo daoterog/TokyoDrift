@@ -1,4 +1,4 @@
-"""Unnormalized Gaussian drift evaluated directly in particle-coordinate space."""
+"""Unnormalized radial-kernel drift in particle-coordinate space."""
 
 from __future__ import annotations
 
@@ -25,17 +25,18 @@ def median_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> float:
 
 
 class DirectCoordinateDrift(nn.Module):
-    """Multi-bandwidth Gaussian density-gradient drift without invariant descriptors.
+    """Multi-bandwidth density-gradient drift without invariant descriptors.
 
-    For a query configuration ``x`` and reference configurations ``y_j``, the
-    attractive field at bandwidth ``h`` is the gradient of the empirical
-    Gaussian kernel density. The kernel includes its probability-density
+    The Gaussian and Laplacian kernels both include their probability-density
     normalization in the effective centered-coordinate dimension
-    ``D = (particles - 1) * dimensions``:
+    ``D = (particles - 1) * dimensions``. For bandwidth ``h``:
 
-    ``k_h(x, y) = (2*pi*h**2)**(-D/2) * exp(-||x-y||**2 / (2*h**2))``
+    ``gaussian: k_h(x, y) = (2*pi*h**2)**(-D/2) * exp(-||x-y||**2 / (2*h**2))``
 
-    ``field_h(x) = mean_j[k_h(x, y_j) * (y_j - x) / h**2]``.
+    ``laplacian: k_h(x, y) = exp(-||x-y|| / h) / (S_(D-1) * Gamma(D) * h**D)``
+
+    The field is the gradient with respect to the query coordinates of the
+    corresponding empirical kernel density.
 
     When multiple bandwidths are supplied, each complete attraction-minus-
     repulsion field is normalized by its RMS magnitude before the fields are
@@ -49,9 +50,15 @@ class DirectCoordinateDrift(nn.Module):
     must be meaningful and consistent across configurations.
     """
 
-    def __init__(self, bandwidth: float | Sequence[float]) -> None:
-        """Initialize a direct-coordinate Gaussian drift."""
+    def __init__(
+        self, bandwidth: float | Sequence[float], kernel: str = "gaussian"
+    ) -> None:
+        """Initialize a direct-coordinate Gaussian or Laplacian drift."""
         super().__init__()
+        kernel = kernel.lower()
+        if kernel not in {"gaussian", "laplacian"}:
+            raise ValueError("kernel must be 'gaussian' or 'laplacian'")
+        self.kernel = kernel
         self.bandwidth = bandwidth
 
     @property
@@ -94,7 +101,7 @@ class DirectCoordinateDrift(nn.Module):
         self_indices: torch.Tensor | None = None,
         reference_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return one Gaussian density gradient and kernel mass per bandwidth."""
+        """Return one density gradient and kernel mass per bandwidth."""
         self._validate_inputs(query, references)
         residual = references.unsqueeze(0) - query.unsqueeze(1)
         squared_distance = residual.flatten(start_dim=2).square().sum(dim=-1)
@@ -125,21 +132,36 @@ class DirectCoordinateDrift(nn.Module):
         fields = []
         masses = []
         for bandwidth in self._bandwidths:
-            log_normalizer = -0.5 * effective_dimension * math.log(
-                2.0 * math.pi * bandwidth**2
-            )
-            kernel = torch.exp(
-                -squared_distance / (2.0 * bandwidth**2) + log_normalizer
-            )
+            if self.kernel == "gaussian":
+                log_normalizer = -0.5 * effective_dimension * math.log(
+                    2.0 * math.pi * bandwidth**2
+                )
+                kernel = torch.exp(
+                    -squared_distance / (2.0 * bandwidth**2) + log_normalizer
+                )
+                kernel_gradient = residual / bandwidth**2
+            else:
+                if effective_dimension == 0:
+                    log_normalizer = 0.0
+                else:
+                    log_normalizer = (
+                        math.lgamma(0.5 * effective_dimension)
+                        - math.log(2.0)
+                        - 0.5 * effective_dimension * math.log(math.pi)
+                        - math.lgamma(effective_dimension)
+                        - effective_dimension * math.log(bandwidth)
+                    )
+                distance = squared_distance.sqrt()
+                kernel = torch.exp(-distance / bandwidth + log_normalizer)
+                safe_distance = distance.clamp_min(torch.finfo(query.dtype).eps)
+                kernel_gradient = residual / (bandwidth * safe_distance[..., None, None])
             if keep is not None:
                 kernel = kernel * keep
             if reference_weights is None:
                 weighted_kernel = kernel / len(references)
             else:
                 weighted_kernel = kernel * reference_weights.unsqueeze(0)
-            fields.append(
-                (weighted_kernel[..., None, None] * residual).sum(dim=1) / bandwidth**2
-            )
+            fields.append((weighted_kernel[..., None, None] * kernel_gradient).sum(dim=1))
             masses.append(weighted_kernel.sum(dim=1))
 
         return torch.stack(fields), torch.stack(masses)

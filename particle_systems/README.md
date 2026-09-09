@@ -1,10 +1,11 @@
 # Particle-system drift benchmarks
 
-A self-contained implementation of direct-coordinate, unnormalized Gaussian-kernel drift on
-the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow Matching* (Klein, Krämer, and Noé,
-2023). It deliberately excludes QM9 and all chemistry-specific code.
+A self-contained implementation of direct-coordinate, unnormalized Gaussian- or
+Laplacian-kernel drift on the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow
+Matching* (Klein, Krämer, and Noé, 2023). It deliberately excludes QM9 and all
+chemistry-specific code.
 
-The method applies the analytical gradient of a Gaussian kernel directly to flattened particle
+The method applies the analytical gradient of a radial kernel directly to flattened particle
 coordinates. It uses data attraction minus generated-sample repulsion without dividing by local
 kernel mass. The generator remains E(n)-equivariant and maps centered noise directly to a
 particle configuration, but the drift comparison itself depends on particle ordering and global
@@ -63,7 +64,7 @@ updated against each reference batch. Logging, validation, learning-rate and ban
 and checkpoint intervals are all expressed in epochs.
 
 `training.bandwidth` accepts a positive number, `"auto"` for the median-distance heuristic, or a
-nonempty list of positive numbers. With a list, each attraction-minus-repulsion Gaussian field is
+nonempty list of positive numbers. With a list, each attraction-minus-repulsion kernel field is
 RMS-normalized before the fields are averaged with equal weight; kernel-mass diagnostics remain
 raw averages. Bandwidth schedules, when present, multiply every value in the list by the same
 epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate, checkpoint, and
@@ -72,6 +73,9 @@ Every Gaussian includes the density normalizer in the effective mean-free coordi
 `(particles - 1) * dimensions`, so its integral over the centered configuration space is one.
 The `drift.normalized: false` setting separately means that the density gradient is not divided by
 the local KDE mass (that is, the drift is not converted into a score).
+Set `drift.kernel` to either `"gaussian"` or `"laplacian"`. Both kernels are normalized to
+integrate to one on the centered configuration space and share the same scalar/list bandwidth,
+per-temperature field normalization, attraction/repulsion, logging, and checkpoint behavior.
 
 The large DW4 configuration can be trained and evaluated in one GPU job:
 

@@ -210,14 +210,19 @@ def main() -> None:
     """Run unnormalized-drift training from a JSON configuration."""
     args = arguments()
     config = load_config(args.config)
-    drift_definition = {
+    default_drift = {
         "space": "particle_coordinates",
         "kernel": "gaussian",
         "normalized": False,
     }
-    configured_drift = config.setdefault("drift", drift_definition)
-    if configured_drift != drift_definition:
-        raise ValueError(f"this training pipeline requires drift={drift_definition}")
+    configured_drift = config.setdefault("drift", default_drift)
+    kernel = str(configured_drift.get("kernel", "gaussian")).lower()
+    drift_definition = {**default_drift, "kernel": kernel}
+    if kernel not in {"gaussian", "laplacian"} or configured_drift != drift_definition:
+        raise ValueError(
+            "this training pipeline requires particle-coordinate, unnormalized drift "
+            "with a gaussian or laplacian kernel"
+        )
     if args.epochs is not None:
         config["training"]["epochs"] = args.epochs
     if args.batch_size is not None:
@@ -329,7 +334,7 @@ def main() -> None:
     final_bandwidth: float | list[float] = (
         final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
     )
-    drift = DirectCoordinateDrift(initial_bandwidth).to(device)
+    drift = DirectCoordinateDrift(initial_bandwidth, kernel=kernel).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "shuffled"))
@@ -395,6 +400,7 @@ def main() -> None:
                 "base_bandwidth": base_bandwidth,
                 "initial_bandwidth": initial_bandwidth,
                 "final_bandwidth": final_bandwidth,
+                "kernel": kernel,
                 "drift_space": "particle_coordinates",
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,

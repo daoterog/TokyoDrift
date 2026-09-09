@@ -126,6 +126,52 @@ class DriftTests(unittest.TestCase):
         integral = torch.trapezoid(kernel_density.squeeze(0), coordinate)
         self.assertTrue(torch.allclose(integral, torch.tensor(1.0), atol=1e-5))
 
+    def test_laplacian_field_matches_analytical_density_gradient(self) -> None:
+        query = torch.tensor([[[-0.5], [0.5]]])
+        reference = torch.tensor([[[-1.5], [1.5]]])
+        field, _ = DirectCoordinateDrift(2.0, kernel="laplacian")(
+            query, reference, repulsion=0.0
+        )
+        distance = torch.sqrt(torch.tensor(2.0))
+        kernel = 0.25 * torch.exp(-distance / 2.0)
+        expected = kernel * (reference - query) / (2.0 * distance)
+        self.assertTrue(torch.allclose(field, expected))
+
+    def test_laplacian_kernel_integrates_to_one_on_centered_coordinate_space(self) -> None:
+        coordinate = torch.linspace(-20.0, 20.0, 40_001)
+        query = torch.stack(
+            (-coordinate / 2.0**0.5, coordinate / 2.0**0.5), dim=1
+        ).unsqueeze(-1)
+        reference = torch.zeros(1, 2, 1)
+        _, kernel_density = DirectCoordinateDrift(1.0, kernel="laplacian")._fields(
+            query, reference
+        )
+        integral = torch.trapezoid(kernel_density.squeeze(0), coordinate)
+        self.assertTrue(torch.allclose(integral, torch.tensor(1.0), atol=1e-5))
+
+    def test_laplacian_supports_normalized_multi_bandwidth_averaging(self) -> None:
+        query = torch.tensor([[[-0.5], [0.5]], [[-1.0], [1.0]]])
+        references = torch.tensor([[[-1.5], [1.5]], [[-2.0], [2.0]]])
+        bandwidths = (0.5, 1.0, 2.0)
+        combined, _ = DirectCoordinateDrift(bandwidths, kernel="laplacian")(
+            query, references, repulsion=0.0
+        )
+        individual = torch.stack(
+            [
+                DirectCoordinateDrift(value, kernel="laplacian")(
+                    query, references, repulsion=0.0
+                )[0]
+                for value in bandwidths
+            ]
+        )
+        rms = individual.square().mean(dim=(1, 2, 3)).sqrt()
+        expected = (individual / rms[:, None, None, None]).mean(dim=0)
+        self.assertTrue(torch.allclose(combined, expected))
+
+    def test_unknown_kernel_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            DirectCoordinateDrift(1.0, kernel="triangular")
+
     def test_multiple_bandwidths_normalize_and_average_their_fields(self) -> None:
         query = torch.tensor([[[0.0]], [[0.5]]])
         references = torch.tensor([[[1.0]], [[2.0]], [[3.0]]])
