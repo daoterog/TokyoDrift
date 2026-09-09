@@ -29,9 +29,13 @@ class DirectCoordinateDrift(nn.Module):
 
     For a query configuration ``x`` and reference configurations ``y_j``, the
     attractive field at bandwidth ``h`` is the gradient of the empirical
-    Gaussian kernel density:
+    Gaussian kernel density. The kernel includes its probability-density
+    normalization in the effective centered-coordinate dimension
+    ``D = (particles - 1) * dimensions``:
 
-    ``mean_j[k_h(x, y_j) * (y_j - x) / h**2]``.
+    ``k_h(x, y) = (2*pi*h**2)**(-D/2) * exp(-||x-y||**2 / (2*h**2))``
+
+    ``field_h(x) = mean_j[k_h(x, y_j) * (y_j - x) / h**2]``.
 
     When multiple bandwidths are supplied, each complete attraction-minus-
     repulsion field is normalized by its RMS magnitude before the fields are
@@ -94,6 +98,7 @@ class DirectCoordinateDrift(nn.Module):
         self._validate_inputs(query, references)
         residual = references.unsqueeze(0) - query.unsqueeze(1)
         squared_distance = residual.flatten(start_dim=2).square().sum(dim=-1)
+        effective_dimension = (query.shape[1] - 1) * query.shape[2]
         keep = None
         if self_indices is not None:
             if self_indices.shape != (len(query),):
@@ -120,7 +125,12 @@ class DirectCoordinateDrift(nn.Module):
         fields = []
         masses = []
         for bandwidth in self._bandwidths:
-            kernel = torch.exp(-squared_distance / (2.0 * bandwidth**2))
+            log_normalizer = -0.5 * effective_dimension * math.log(
+                2.0 * math.pi * bandwidth**2
+            )
+            kernel = torch.exp(
+                -squared_distance / (2.0 * bandwidth**2) + log_normalizer
+            )
             if keep is not None:
                 kernel = kernel * keep
             if reference_weights is None:

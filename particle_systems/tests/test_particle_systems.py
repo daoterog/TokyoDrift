@@ -108,11 +108,23 @@ class ReferenceSamplingTests(unittest.TestCase):
 
 class DriftTests(unittest.TestCase):
     def test_field_matches_analytical_gaussian_gradient(self) -> None:
-        query = torch.tensor([[[0.0]]])
-        reference = torch.tensor([[[1.0]]])
+        query = torch.tensor([[[-0.5], [0.5]]])
+        reference = torch.tensor([[[-1.5], [1.5]]])
         field, _ = DirectCoordinateDrift(2.0)(query, reference, repulsion=0.0)
-        expected = torch.exp(torch.tensor(-1.0 / 8.0)) / 4.0
-        self.assertTrue(torch.allclose(field.squeeze(), expected))
+        normalizer = 1.0 / torch.sqrt(torch.tensor(8.0 * torch.pi))
+        kernel = normalizer * torch.exp(torch.tensor(-1.0 / 4.0))
+        expected = kernel * (reference - query) / 4.0
+        self.assertTrue(torch.allclose(field, expected))
+
+    def test_gaussian_kernel_integrates_to_one_on_centered_coordinate_space(self) -> None:
+        coordinate = torch.linspace(-10.0, 10.0, 20_001)
+        query = torch.stack(
+            (-coordinate / 2.0**0.5, coordinate / 2.0**0.5), dim=1
+        ).unsqueeze(-1)
+        reference = torch.zeros(1, 2, 1)
+        _, kernel_density = DirectCoordinateDrift(1.0)._fields(query, reference)
+        integral = torch.trapezoid(kernel_density.squeeze(0), coordinate)
+        self.assertTrue(torch.allclose(integral, torch.tensor(1.0), atol=1e-5))
 
     def test_multiple_bandwidths_normalize_and_average_their_fields(self) -> None:
         query = torch.tensor([[[0.0]], [[0.5]]])

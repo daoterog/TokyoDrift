@@ -68,6 +68,10 @@ RMS-normalized before the fields are averaged with equal weight; kernel-mass dia
 raw averages. Bandwidth schedules, when present, multiply every value in the list by the same
 epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate, checkpoint, and
 evaluate without EMA weights; `1.0` is rejected because it would freeze EMA at initialization.
+Every Gaussian includes the density normalizer in the effective mean-free coordinate dimension
+`(particles - 1) * dimensions`, so its integral over the centered configuration space is one.
+The `drift.normalized: false` setting separately means that the density gradient is not divided by
+the local KDE mass (that is, the drift is not converted into a score).
 
 The large DW4 configuration can be trained and evaluated in one GPU job:
 
