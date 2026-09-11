@@ -1,15 +1,16 @@
 # Particle-system drift benchmarks
 
-A self-contained implementation of direct-coordinate, unnormalized Gaussian- or
+A self-contained implementation of coordinate- or descriptor-based, unnormalized Gaussian- or
 Laplacian-kernel drift on the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow
 Matching* (Klein, Krämer, and Noé, 2023). It deliberately excludes QM9 and all
 chemistry-specific code.
 
-The method applies the analytical gradient of a radial kernel directly to flattened particle
-coordinates. It uses data attraction minus generated-sample repulsion without dividing by local
+The method uses data attraction minus generated-sample repulsion without dividing by local
 kernel mass. The generator remains E(n)-equivariant and maps centered noise directly to a
-particle configuration, but the drift comparison itself depends on particle ordering and global
-orientation.
+particle configuration. With `drift.descriptors: true`, the kernel compares invariant sorted
+pair distances and its gradient is pulled back to particle coordinates. With `false` (also the
+default for older configs), it compares flattened coordinates, which depend on particle ordering
+and global orientation. The three baseline `gaussian.json` files enable descriptors.
 
 ## Layout
 
@@ -77,6 +78,67 @@ Set `drift.kernel` to either `"gaussian"` or `"laplacian"`. Both kernels share t
 scalar/list bandwidth, raw field averaging, attraction/repulsion, logging, and checkpoint
 behavior.
 
+### Descriptor comparison and bandwidths
+
+Set the boolean inside the `drift` object in `configs/<system>/gaussian.json`:
+
+```json
+"drift": {
+  "space": "particle_coordinates",
+  "kernel": "gaussian",
+  "normalized": false,
+  "descriptors": true
+}
+```
+
+`space` describes the coordinate updates returned by the drift; `descriptors` selects the kernel
+comparison. The descriptor is the sorted list of all unique interparticle distances, divided by
+the square root of the number of pairs. Thus, descriptor distance is the **RMS difference of
+sorted pair distances**, and bandwidth has distance units without growing merely because the
+system has more pairs. No sample-dependent rescaling removes physical size information.
+
+This choice removes translations, rotations, reflections and permutations of identical
+particles. It also retains every pair distance used in the DW4 and LJ energy sums, including the
+short-distance contacts that an energy scalar, radius alone, or coarse histogram would obscure.
+The descriptor kernel gradient is mapped back with the descriptor Jacobian transpose, so both
+attraction and repulsion produce coordinate updates and preserve the center. Reference samples
+remain detached. Kernels retain their existing unnormalized, equal-weight bandwidth averaging.
+
+Sorted distance lists are not a complete representation of geometry: different structures can
+have identical lists, and pair connectivity is lost. They compare configurations within each
+fixed-size benchmark; they are not a cross-species or variable-particle-count representation.
+Sorting is differentiable almost everywhere, with a selected subgradient at ties; exact coincident
+particles have no well-defined separating direction. These limitations mean descriptor matching
+alone does not establish correct full-configuration sampling. The relevance of symmetry is
+discussed in [Equivariant Flow Matching](https://arxiv.org/abs/2306.15030), and the general issue of
+nonunique structural descriptors in [Pozdnyakov et al.](https://arxiv.org/abs/2001.11696).
+
+The measured Gaussian starting bandwidths are:
+
+| System | Data distance median | Initial generator-to-data median | Configured bandwidths |
+| --- | ---: | ---: | --- |
+| DW4 | 0.9173 | 1.3907 | `[0.15, 0.45, 0.9, 1.8]` |
+| LJ13 | 0.1351 | 0.7178 | `[0.07, 0.14, 0.28, 0.5]` |
+| LJ55 | 0.0440 | 0.2024 | `[0.022, 0.044, 0.088, 0.15]` |
+
+These are coverage-based starting values, not optimized training results. Narrow components
+resolve nearby structures; broad components provide attraction from the initial generator.
+The baseline lists use a constant scale, keeping the broad component available throughout
+training. `"auto"` estimates a single median in whichever comparison space is selected; it
+does not check initial generator coverage. When switching to `descriptors: false`, also restore
+coordinate bandwidths or use `"auto"`; the two spaces have very different distance scales.
+Resume requires the same descriptor setting as the checkpoint; start a new run/output directory
+when changing this setting.
+
+See the [bandwidth audit](reports/descriptor_bandwidths/README.md) for methodology and limitations.
+Reproduce the diagnostic against the local training split and configured model initialization:
+
+```bash
+uv run --project particle_systems --no-sync python -m particle_systems.check_bandwidths \
+  --config particle_systems/configs/lj13/gaussian.json \
+  --output /tmp/lj13-descriptor-bandwidths.json --samples 512 --seed 42
+```
+
 The large DW4 configuration can be trained and evaluated in one GPU job:
 
 ```bash
@@ -96,6 +158,13 @@ uv run --project particle_systems --no-sync python -m particle_systems.evaluate 
   --output particle_systems/artifacts/evaluations/dw4-seed42 \
   --num-samples 500000
 ```
+
+Evaluation uses every generated configuration for energy and validity statistics, scanning pair
+distances in bounded batches where necessary. Quantile-based metrics and plots deterministically
+sample whole configurations before expanding at most 1,000,000 pair-distance observations per
+distribution, so systems with many particle pairs (such as LJ13 and LJ55) do not exceed PyTorch's
+quantile size limit. The cap and sampling method are recorded in `metrics.json`; override the cap
+with `--metric-sample-size` when needed.
 
 ## GMM-40 benchmark
 

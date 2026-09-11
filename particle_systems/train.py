@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .descriptors import DescriptorDrift, descriptor_bandwidth
 from .io import build_model, device_summary, load_config, load_dataset, select_device
 from .systems import ParticleSystem, get_system
 from .unnormalized_drifting import DirectCoordinateDrift, median_bandwidth
@@ -46,9 +47,7 @@ class EnergyStratifiedReferenceSampler:
         masses = torch.tensor([len(value) / len(samples) for value in indices], dtype=samples.dtype)
         return cls(samples=samples, bin_indices=indices, bin_masses=masses, boundaries=boundaries)
 
-    def epoch_batches(
-        self, batch_size: int, generator: torch.Generator
-    ) -> list[torch.Tensor]:
+    def epoch_batches(self, batch_size: int, generator: torch.Generator) -> list[torch.Tensor]:
         """Return stratified batches containing every reference exactly once."""
         batch_count = math.ceil(len(self.samples) / batch_size)
         shuffled_bins = [
@@ -121,6 +120,31 @@ def resolve_ema_decay(training: dict) -> float | None:
     if not 0.0 <= decay < 1.0:
         raise ValueError("ema_decay must be in [0, 1), or null to disable EMA")
     return decay
+
+
+def resolve_drift_definition(config: dict) -> dict:
+    """Validate the descriptor toggle while retaining legacy coordinate configs."""
+    defaults = {
+        "space": "particle_coordinates",
+        "kernel": "gaussian",
+        "normalized": False,
+        "descriptors": False,
+    }
+    definition = {**defaults, **config.get("drift", {})}
+    if type(definition["descriptors"]) is not bool:
+        raise ValueError("drift.descriptors must be true or false")
+    definition["kernel"] = str(definition["kernel"]).lower()
+    if (
+        definition.keys() != defaults.keys()
+        or definition["space"] != "particle_coordinates"
+        or definition["normalized"] is not False
+        or definition["kernel"] not in {"gaussian", "laplacian"}
+    ):
+        raise ValueError(
+            "drift requires particle-coordinate updates, normalized: false, "
+            "a gaussian or laplacian kernel, and an optional descriptors boolean"
+        )
+    return definition
 
 
 def arguments() -> argparse.Namespace:
@@ -210,19 +234,10 @@ def main() -> None:
     """Run unnormalized-drift training from a JSON configuration."""
     args = arguments()
     config = load_config(args.config)
-    default_drift = {
-        "space": "particle_coordinates",
-        "kernel": "gaussian",
-        "normalized": False,
-    }
-    configured_drift = config.setdefault("drift", default_drift)
-    kernel = str(configured_drift.get("kernel", "gaussian")).lower()
-    drift_definition = {**default_drift, "kernel": kernel}
-    if kernel not in {"gaussian", "laplacian"} or configured_drift != drift_definition:
-        raise ValueError(
-            "this training pipeline requires particle-coordinate, unnormalized drift "
-            "with a gaussian or laplacian kernel"
-        )
+    drift_definition = resolve_drift_definition(config)
+    config["drift"] = drift_definition
+    kernel = drift_definition["kernel"]
+    use_descriptors = drift_definition["descriptors"]
     if args.epochs is not None:
         config["training"]["epochs"] = args.epochs
     if args.batch_size is not None:
@@ -232,7 +247,9 @@ def main() -> None:
     if args.positive_reference_sampling is not None:
         config["training"]["positive_reference_sampling"] = args.positive_reference_sampling
     if args.positive_reference_energy_quantiles is not None:
-        config["training"]["positive_reference_energy_quantiles"] = args.positive_reference_energy_quantiles
+        config["training"]["positive_reference_energy_quantiles"] = (
+            args.positive_reference_energy_quantiles
+        )
     if args.seed is not None:
         config["seed"] = args.seed
     if args.output is not None:
@@ -294,8 +311,8 @@ def main() -> None:
             raise ValueError("resume checkpoint and config systems differ")
         if checkpoint_config["model"] != config["model"]:
             raise ValueError("resume checkpoint and config model definitions differ")
-        if checkpoint_config.get("drift") != drift_definition:
-            raise ValueError("resume checkpoint was not trained with direct-coordinate drift")
+        if resolve_drift_definition(checkpoint_config) != drift_definition:
+            raise ValueError("resume checkpoint and config drift definitions differ")
         model.load_state_dict(checkpoint["model"])
         if ema is not None:
             ema_state = checkpoint.get("ema")
@@ -316,7 +333,8 @@ def main() -> None:
             torch.mps.set_rng_state(checkpoint["mps_rng"])
     bandwidth_config = training["bandwidth"]
     if bandwidth_config == "auto":
-        base_bandwidths = (median_bandwidth(train_data),)
+        estimate_bandwidth = descriptor_bandwidth if use_descriptors else median_bandwidth
+        base_bandwidths = (estimate_bandwidth(train_data),)
     elif isinstance(bandwidth_config, list):
         base_bandwidths = tuple(float(value) for value in bandwidth_config)
     else:
@@ -334,7 +352,8 @@ def main() -> None:
     final_bandwidth: float | list[float] = (
         final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
     )
-    drift = DirectCoordinateDrift(initial_bandwidth, kernel=kernel).to(device)
+    drift_class = DescriptorDrift if use_descriptors else DirectCoordinateDrift
+    drift = drift_class(initial_bandwidth, kernel=kernel).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "shuffled"))
@@ -345,9 +364,7 @@ def main() -> None:
         else None
     )
     if reference_sampling not in {"shuffled", "energy-stratified"}:
-        raise ValueError(
-            "positive_reference_sampling must be 'shuffled' or 'energy-stratified'"
-        )
+        raise ValueError("positive_reference_sampling must be 'shuffled' or 'energy-stratified'")
     outdir = Path(config["output"])
     outdir.mkdir(parents=True, exist_ok=True)
     resolved_parameters = {
@@ -401,7 +418,9 @@ def main() -> None:
                 "initial_bandwidth": initial_bandwidth,
                 "final_bandwidth": final_bandwidth,
                 "kernel": kernel,
-                "drift_space": "particle_coordinates",
+                "drift_space": "sorted_pair_distances"
+                if use_descriptors
+                else "particle_coordinates",
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,
                 "ema_enabled": ema is not None,
@@ -423,9 +442,7 @@ def main() -> None:
         current_scale = bandwidth_scale(training, epoch)
         current_bandwidths = tuple(value * current_scale for value in base_bandwidths)
         current_bandwidth: float | list[float] = (
-            current_bandwidths[0]
-            if len(current_bandwidths) == 1
-            else list(current_bandwidths)
+            current_bandwidths[0] if len(current_bandwidths) == 1 else list(current_bandwidths)
         )
         drift.bandwidth = current_bandwidth
         if stratified_references is None:
@@ -433,9 +450,7 @@ def main() -> None:
                 len(train_data), reference_batch_size, generator
             )
         else:
-            reference_batches = stratified_references.epoch_batches(
-                reference_batch_size, generator
-            )
+            reference_batches = stratified_references.epoch_batches(reference_batch_size, generator)
 
         epoch_totals: dict[str, float] = {}
         for batch_index, reference_indices in enumerate(reference_batches, start=1):
@@ -488,10 +503,7 @@ def main() -> None:
                 "epoch": epoch,
                 "global_step": global_step,
                 "batches": len(reference_batches),
-                **{
-                    name: value / len(reference_batches)
-                    for name, value in epoch_totals.items()
-                },
+                **{name: value / len(reference_batches) for name, value in epoch_totals.items()},
                 "bandwidth_scale": current_scale,
                 "bandwidth": current_bandwidth,
                 "learning_rate": current_learning_rate,

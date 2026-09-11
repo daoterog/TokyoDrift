@@ -3,7 +3,8 @@
   "drift": {
     "space": "particle_coordinates",
     "kernel": "gaussian",
-    "normalized": false
+    "normalized": false,
+    "descriptors": true
   },
   "data": "particle_systems/data/lj55.npz",
   "output": "particle_systems/artifacts/runs/lj55/gaussian",
@@ -20,11 +21,7 @@
     "batch_size": 64,
     "positive_references": 64,
     "coordinate_noise_scale": 1.0,
-    "bandwidth": "auto",
-    "bandwidth_scale_start": 1.5,
-    "bandwidth_scale_end": 0.5,
-    "bandwidth_anneal_start": 19,
-    "bandwidth_anneal_end": 64,
+    "bandwidth": [0.022, 0.044, 0.088, 0.15],
     "eta": 0.2,
     "repulsion": 1.0,
     "min_radius_fraction": 0.25,

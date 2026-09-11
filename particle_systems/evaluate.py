@@ -13,6 +13,9 @@ import torch
 from .io import build_model, device_summary, load_dataset, select_device
 from .systems import center, get_system, pair_distances
 
+DEFAULT_METRIC_SAMPLE_SIZE = 1_000_000
+METRIC_SAMPLE_SEED = 17_903
+
 
 def arguments() -> argparse.Namespace:
     """Parse evaluation command-line arguments."""
@@ -24,6 +27,15 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--save-samples", action="store_true")
+    parser.add_argument(
+        "--metric-sample-size",
+        type=int,
+        default=DEFAULT_METRIC_SAMPLE_SIZE,
+        help=(
+            "Maximum observations per distribution used by quantile and histogram "
+            "estimators. Larger observable arrays are uniformly subsampled."
+        ),
+    )
     parser.add_argument(
         "--valid-energy-quantile",
         type=float,
@@ -39,20 +51,75 @@ def arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def wasserstein_1(left: torch.Tensor, right: torch.Tensor, points: int = 4096) -> float | None:
+def metric_observations(
+    values: torch.Tensor, max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE
+) -> torch.Tensor:
+    """Return a bounded, deterministic sample of finite scalar observations."""
+    if max_observations <= 0:
+        raise ValueError("metric sample size must be positive")
+    values = values.detach().flatten().float().cpu()
+    values = values[torch.isfinite(values)]
+    if values.numel() <= max_observations:
+        return values
+    generator = torch.Generator().manual_seed(METRIC_SAMPLE_SEED)
+    indices = torch.randint(values.numel(), (max_observations,), generator=generator)
+    return values.index_select(0, indices)
+
+
+def pair_distance_observations(
+    positions: torch.Tensor, max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE
+) -> torch.Tensor:
+    """Compute bounded pair-distance observations from uniformly sampled configurations."""
+    if max_observations <= 0:
+        raise ValueError("metric sample size must be positive")
+    particles = positions.shape[-2]
+    pairs_per_configuration = particles * (particles - 1) // 2
+    maximum_configurations = max(1, max_observations // pairs_per_configuration)
+    if len(positions) > maximum_configurations:
+        generator = torch.Generator().manual_seed(METRIC_SAMPLE_SEED)
+        indices = torch.randperm(len(positions), generator=generator)[:maximum_configurations]
+        positions = positions.index_select(0, indices.to(positions.device))
+    return metric_observations(pair_distances(positions), max_observations)
+
+
+def minimum_pair_distances(
+    positions: torch.Tensor, configuration_batch_size: int = 65_536
+) -> torch.Tensor:
+    """Compute each configuration's closest pair with bounded temporary storage."""
+    if configuration_batch_size <= 0:
+        raise ValueError("configuration batch size must be positive")
+    return torch.cat(
+        [
+            pair_distances(positions[start : start + configuration_batch_size]).min(dim=-1).values
+            for start in range(0, len(positions), configuration_batch_size)
+        ]
+    )
+
+
+def wasserstein_1(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    points: int = 4096,
+    max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE,
+) -> float | None:
     """Estimate scalar Wasserstein-1 distance from matched empirical quantiles."""
-    left = left[torch.isfinite(left)].float().cpu()
-    right = right[torch.isfinite(right)].float().cpu()
+    left = metric_observations(left, max_observations)
+    right = metric_observations(right, max_observations)
     if left.numel() == 0 or right.numel() == 0:
         return None
     quantiles = torch.linspace(0.0, 1.0, min(points, left.numel(), right.numel()))
     return float((torch.quantile(left, quantiles) - torch.quantile(right, quantiles)).abs().mean())
 
 
-def histogram_js(left: torch.Tensor, right: torch.Tensor, bins: int = 200) -> float | None:
+def histogram_js(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    bins: int = 200,
+    max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE,
+) -> float | None:
     """Compute Jensen-Shannon divergence between robust-range histograms."""
-    left = left[torch.isfinite(left)].float().cpu()
-    right = right[torch.isfinite(right)].float().cpu()
+    left = metric_observations(left, max_observations)
+    right = metric_observations(right, max_observations)
     if left.numel() == 0 or right.numel() == 0:
         return None
     combined = torch.cat((left, right))
@@ -98,14 +165,17 @@ def generate(
 
 
 def distribution_metrics(
-    generated: torch.Tensor, reference: torch.Tensor, system_name: str
+    generated: torch.Tensor,
+    reference: torch.Tensor,
+    system_name: str,
+    metric_sample_size: int = DEFAULT_METRIC_SAMPLE_SIZE,
 ) -> dict[str, Any]:
     """Compare generated and held-out samples through invariant observables."""
     system = get_system(system_name)
     generated_energy = system.energy(generated)
     reference_energy = system.energy(reference)
-    generated_distances = pair_distances(generated).flatten()
-    reference_distances = pair_distances(reference).flatten()
+    generated_distances = pair_distance_observations(generated, metric_sample_size)
+    reference_distances = pair_distance_observations(reference, metric_sample_size)
     generated_radius = generated.square().sum(dim=-1).mean(dim=-1).sqrt()
     reference_radius = reference.square().sum(dim=-1).mean(dim=-1).sqrt()
     finite_generated_energy = generated_energy[torch.isfinite(generated_energy)]
@@ -118,18 +188,30 @@ def distribution_metrics(
         "energy_std": float(finite_generated_energy.std())
         if finite_generated_energy.numel() > 1
         else None,
-        "energy_wasserstein_1": wasserstein_1(generated_energy, reference_energy),
-        "energy_histogram_js": histogram_js(generated_energy, reference_energy),
-        "pair_distance_wasserstein_1": wasserstein_1(generated_distances, reference_distances),
-        "radius_wasserstein_1": wasserstein_1(generated_radius, reference_radius),
+        "energy_wasserstein_1": wasserstein_1(
+            generated_energy, reference_energy, max_observations=metric_sample_size
+        ),
+        "energy_histogram_js": histogram_js(
+            generated_energy, reference_energy, max_observations=metric_sample_size
+        ),
+        "pair_distance_wasserstein_1": wasserstein_1(
+            generated_distances, reference_distances, max_observations=metric_sample_size
+        ),
+        "radius_wasserstein_1": wasserstein_1(
+            generated_radius, reference_radius, max_observations=metric_sample_size
+        ),
         "collision_fraction_d_lt_0_5": float(
-            (pair_distances(generated).min(dim=-1).values < 0.5).float().mean()
+            (minimum_pair_distances(generated) < 0.5).float().mean()
         ),
         "energy_tail": {
             "reference_q99": float(reference_q99),
-            "generated_mass_above_reference_q99": float((generated_energy > reference_q99).float().mean()),
+            "generated_mass_above_reference_q99": float(
+                (generated_energy > reference_q99).float().mean()
+            ),
             "reference_q999": float(reference_q999),
-            "generated_mass_above_reference_q999": float((generated_energy > reference_q999).float().mean()),
+            "generated_mass_above_reference_q999": float(
+                (generated_energy > reference_q999).float().mean()
+            ),
         },
         "reference": {
             "energy_mean": float(reference_energy.mean()),
@@ -157,12 +239,14 @@ def validity_metrics(
         raise ValueError("minimum pair distance must be positive")
     system = get_system(system_name)
     reference_energy = system.energy(reference)
-    energy_cutoff = torch.quantile(reference_energy[torch.isfinite(reference_energy)], energy_quantile)
+    energy_cutoff = torch.quantile(
+        reference_energy[torch.isfinite(reference_energy)], energy_quantile
+    )
 
     def classify(samples: torch.Tensor) -> dict[str, float]:
         energy = system.energy(samples)
         finite = torch.isfinite(energy)
-        collision_free = pair_distances(samples).min(dim=-1).values >= minimum_pair_distance
+        collision_free = minimum_pair_distances(samples) >= minimum_pair_distance
         useful_energy = finite & (energy <= energy_cutoff)
         valid = collision_free & useful_energy
         return {
@@ -189,6 +273,7 @@ def valid_sample_observables(
     system_name: str,
     energy_quantile: float,
     minimum_pair_distance: float,
+    metric_sample_size: int = DEFAULT_METRIC_SAMPLE_SIZE,
 ) -> dict[str, Any]:
     """Compare useful retained samples, rather than demanding raw density equality.
 
@@ -205,16 +290,46 @@ def valid_sample_observables(
         return (
             torch.isfinite(energy)
             & (energy <= cutoff)
-            & (pair_distances(samples).min(dim=-1).values >= minimum_pair_distance)
+            & (minimum_pair_distances(samples) >= minimum_pair_distance)
         )
 
     generated_mask, reference_mask = mask(generated), mask(reference)
     retained_generated, retained_reference = generated[generated_mask], reference[reference_mask]
+    retained_counts = {
+        "generated": len(retained_generated),
+        "reference": len(retained_reference),
+    }
+    retained_fractions = {
+        "generated_retained_fraction": float(generated_mask.float().mean()),
+        "reference_retained_fraction": float(reference_mask.float().mean()),
+    }
     if not len(retained_generated) or not len(retained_reference):
-        raise ValueError("validity filter retained no samples")
-    generated_energy, reference_energy = system.energy(retained_generated), system.energy(retained_reference)
-    generated_distance = pair_distances(retained_generated).flatten()
-    reference_distance = pair_distances(retained_reference).flatten()
+        empty_populations = [name for name, count in retained_counts.items() if count == 0]
+        return {
+            "definition": {
+                "minimum_pair_distance": minimum_pair_distance,
+                "energy_cutoff_reference_quantile": energy_quantile,
+                "energy_cutoff": float(cutoff),
+            },
+            **retained_fractions,
+            "retained_counts": retained_counts,
+            "comparison_available": False,
+            "unavailable_reason": (
+                "No valid samples were retained for: " + ", ".join(empty_populations)
+            ),
+            "energy_mean_generated": None,
+            "energy_mean_reference": None,
+            "energy_wasserstein_1": None,
+            "energy_histogram_js": None,
+            "pair_distance_wasserstein_1": None,
+            "radius_wasserstein_1": None,
+        }
+    generated_energy, reference_energy = (
+        system.energy(retained_generated),
+        system.energy(retained_reference),
+    )
+    generated_distance = pair_distance_observations(retained_generated, metric_sample_size)
+    reference_distance = pair_distance_observations(retained_reference, metric_sample_size)
     generated_radius = retained_generated.square().sum(dim=-1).mean(dim=-1).sqrt()
     reference_radius = retained_reference.square().sum(dim=-1).mean(dim=-1).sqrt()
     return {
@@ -223,15 +338,24 @@ def valid_sample_observables(
             "energy_cutoff_reference_quantile": energy_quantile,
             "energy_cutoff": float(cutoff),
         },
-        "generated_retained_fraction": float(generated_mask.float().mean()),
-        "reference_retained_fraction": float(reference_mask.float().mean()),
-        "retained_counts": {"generated": int(len(retained_generated)), "reference": int(len(retained_reference))},
+        **retained_fractions,
+        "retained_counts": retained_counts,
+        "comparison_available": True,
+        "unavailable_reason": None,
         "energy_mean_generated": float(generated_energy.mean()),
         "energy_mean_reference": float(reference_energy.mean()),
-        "energy_wasserstein_1": wasserstein_1(generated_energy, reference_energy),
-        "energy_histogram_js": histogram_js(generated_energy, reference_energy),
-        "pair_distance_wasserstein_1": wasserstein_1(generated_distance, reference_distance),
-        "radius_wasserstein_1": wasserstein_1(generated_radius, reference_radius),
+        "energy_wasserstein_1": wasserstein_1(
+            generated_energy, reference_energy, max_observations=metric_sample_size
+        ),
+        "energy_histogram_js": histogram_js(
+            generated_energy, reference_energy, max_observations=metric_sample_size
+        ),
+        "pair_distance_wasserstein_1": wasserstein_1(
+            generated_distance, reference_distance, max_observations=metric_sample_size
+        ),
+        "radius_wasserstein_1": wasserstein_1(
+            generated_radius, reference_radius, max_observations=metric_sample_size
+        ),
     }
 
 
@@ -240,6 +364,7 @@ def plot_histograms(
     reference: torch.Tensor,
     system_name: str,
     output: Path,
+    metric_sample_size: int = DEFAULT_METRIC_SAMPLE_SIZE,
 ) -> None:
     """Write energy and pair-distance marginal histograms."""
     import os
@@ -258,8 +383,8 @@ def plot_histograms(
     reference_energy = system.energy(reference).numpy()
     finite = np.concatenate((generated_energy[np.isfinite(generated_energy)], reference_energy))
     low, high = np.quantile(finite, [0.005, 0.995])
-    generated_distance = pair_distances(generated).flatten().numpy()
-    reference_distance = pair_distances(reference).flatten().numpy()
+    generated_distance = pair_distance_observations(generated, metric_sample_size).numpy()
+    reference_distance = pair_distance_observations(reference, metric_sample_size).numpy()
     figure, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].hist(
         reference_energy, bins=150, range=(low, high), density=True, alpha=0.6, label="test"
@@ -298,6 +423,8 @@ def plot_histograms(
 def main() -> None:
     """Run checkpoint sampling and evaluation."""
     args = arguments()
+    if args.metric_sample_size <= 0:
+        raise ValueError("metric sample size must be positive")
     torch.manual_seed(args.seed)
     device = select_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -323,14 +450,26 @@ def main() -> None:
         "system": system.name,
         "checkpoint": str(args.checkpoint),
         "checkpoint_step": int(checkpoint["step"]),
-        "checkpoint_epoch": (
-            int(checkpoint["epoch"]) if "epoch" in checkpoint else None
-        ),
+        "checkpoint_epoch": (int(checkpoint["epoch"]) if "epoch" in checkpoint else None),
         "evaluated_weights": evaluated_weights,
         "num_generated_samples": args.num_samples,
         "num_test_samples": len(reference),
+        "metric_estimation": {
+            "quantile_points": 4096,
+            "maximum_observations_per_distribution": args.metric_sample_size,
+            "large_scalar_observation_sampling": "deterministic uniform with replacement",
+            "pair_distance_sampling": (
+                "deterministic uniform configuration sampling without replacement"
+            ),
+            "sampling_seed": METRIC_SAMPLE_SEED,
+        },
         "runtime": device_summary(device),
-        "sample_metrics": distribution_metrics(generated, reference, system.name),
+        "sample_metrics": distribution_metrics(
+            generated,
+            reference,
+            system.name,
+            metric_sample_size=args.metric_sample_size,
+        ),
         "validity_metrics": validity_metrics(
             generated,
             reference,
@@ -344,6 +483,7 @@ def main() -> None:
             system.name,
             args.valid_energy_quantile,
             args.min_pair_distance,
+            metric_sample_size=args.metric_sample_size,
         ),
         "endpoint_transport_distance_per_particle": endpoint_distance,
         "paper_metrics": {
@@ -362,7 +502,13 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     with (args.output / "metrics.json").open("w") as stream:
         json.dump(metrics, stream, indent=2, allow_nan=False)
-    plot_histograms(generated, reference, system.name, args.output / "distributions.png")
+    plot_histograms(
+        generated,
+        reference,
+        system.name,
+        args.output / "distributions.png",
+        metric_sample_size=args.metric_sample_size,
+    )
     if args.save_samples:
         np.savez_compressed(args.output / "samples.npz", positions=generated.numpy())
     print(json.dumps(metrics, indent=2, allow_nan=False))

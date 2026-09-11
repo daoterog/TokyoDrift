@@ -5,7 +5,14 @@ import unittest
 import numpy as np
 import torch
 
-from particle_systems.evaluate import valid_sample_observables, validity_metrics
+from particle_systems.evaluate import (
+    metric_observations,
+    minimum_pair_distances,
+    pair_distance_observations,
+    valid_sample_observables,
+    validity_metrics,
+    wasserstein_1,
+)
 from particle_systems.model import ParticleGenerator
 from particle_systems.prepare_data import select_rows
 from particle_systems.systems import center, dw4_energy, get_system, lj_energy
@@ -53,7 +60,9 @@ class PotentialTests(unittest.TestCase):
                 [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]],
             ]
         )
-        report = validity_metrics(samples, samples, "dw4", energy_quantile=0.99, minimum_pair_distance=0.5)
+        report = validity_metrics(
+            samples, samples, "dw4", energy_quantile=0.99, minimum_pair_distance=0.5
+        )
         self.assertEqual(report["generated"]["valid_fraction"], 1.0)
         self.assertEqual(report["reference"]["valid_fraction"], 1.0)
         observables = valid_sample_observables(
@@ -61,6 +70,50 @@ class PotentialTests(unittest.TestCase):
         )
         self.assertEqual(observables["generated_retained_fraction"], 1.0)
         self.assertEqual(observables["energy_wasserstein_1"], 0.0)
+
+    def test_empty_valid_population_is_reported_instead_of_raising(self) -> None:
+        generated = torch.zeros(2, 4, 2)
+        reference = torch.tensor(
+            [
+                [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]],
+                [[-2.1, -2.0], [-2.0, 2.1], [2.1, -2.0], [2.0, 2.1]],
+            ]
+        )
+        report = valid_sample_observables(
+            generated,
+            reference,
+            "dw4",
+            energy_quantile=0.99,
+            minimum_pair_distance=0.5,
+        )
+        self.assertFalse(report["comparison_available"])
+        self.assertEqual(report["retained_counts"]["generated"], 0)
+        self.assertIsNone(report["pair_distance_wasserstein_1"])
+
+    def test_large_metric_inputs_are_bounded_deterministically(self) -> None:
+        values = torch.arange(10_000, dtype=torch.float32)
+        first = metric_observations(values, max_observations=1_000)
+        second = metric_observations(values, max_observations=1_000)
+        self.assertEqual(first.numel(), 1_000)
+        self.assertTrue(torch.equal(first, second))
+
+    def test_bounded_wasserstein_preserves_a_constant_shift(self) -> None:
+        left = torch.arange(10_000, dtype=torch.float32)
+        right = left + 2.0
+        distance = wasserstein_1(left, right, points=128, max_observations=1_000)
+        self.assertAlmostEqual(distance, 2.0)
+
+    def test_lj13_pair_distance_observations_are_bounded_before_expansion(self) -> None:
+        positions = torch.randn(100, 13, 3)
+        distances = pair_distance_observations(positions, max_observations=1_000)
+        self.assertEqual(distances.numel(), 12 * 78)
+
+    def test_chunked_minimum_pair_distances_include_every_configuration(self) -> None:
+        positions = torch.randn(23, 13, 3)
+        expected = torch.pdist(positions[0]).min()
+        actual = minimum_pair_distances(positions, configuration_batch_size=5)
+        self.assertEqual(actual.shape, (23,))
+        self.assertTrue(torch.allclose(actual[0], expected))
 
 
 class GMMTests(unittest.TestCase):
