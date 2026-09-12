@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import torch
 
 from particle_systems.evaluate import (
+    histogram_js,
     metric_observations,
     minimum_pair_distances,
     pair_distance_observations,
+    plot_energy_distributions,
     valid_sample_observables,
     validity_metrics,
     wasserstein_1,
@@ -103,6 +107,11 @@ class PotentialTests(unittest.TestCase):
         distance = wasserstein_1(left, right, points=128, max_observations=1_000)
         self.assertAlmostEqual(distance, 2.0)
 
+    def test_energy_histogram_js_keeps_extreme_tail_mass(self) -> None:
+        reference = torch.linspace(-220, -180, 1_000)
+        generated = torch.full((1_000,), 1e12)
+        self.assertGreater(histogram_js(generated, reference), 0.67)
+
     def test_lj13_pair_distance_observations_are_bounded_before_expansion(self) -> None:
         positions = torch.randn(100, 13, 3)
         distances = pair_distance_observations(positions, max_observations=1_000)
@@ -114,6 +123,23 @@ class PotentialTests(unittest.TestCase):
         actual = minimum_pair_distances(positions, configuration_batch_size=5)
         self.assertEqual(actual.shape, (23,))
         self.assertTrue(torch.allclose(actual[0], expected))
+
+    def test_energy_plots_separate_all_and_valid_populations(self) -> None:
+        reference = torch.tensor(
+            [
+                [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]],
+                [[-2.1, -2.0], [-2.0, 2.1], [2.1, -2.0], [2.0, 2.1]],
+            ]
+        )
+        generated = torch.cat((reference, torch.zeros(1, 4, 2)))
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            plot_energy_distributions(generated, reference, "dw4", output, 0.99, 0.5)
+            self.assertTrue((output / "energy_all_samples.png").is_file())
+            self.assertTrue((output / "energy_valid_samples.png").is_file())
+            with np.load(output / "energy_distributions.npz") as archive:
+                self.assertEqual(archive["generated"].shape, (3,))
+                self.assertFalse(archive["generated_valid"][-1])
 
 
 class GMMTests(unittest.TestCase):

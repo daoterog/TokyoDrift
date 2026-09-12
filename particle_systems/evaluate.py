@@ -112,22 +112,42 @@ def wasserstein_1(
 
 
 def histogram_js(
-    left: torch.Tensor,
-    right: torch.Tensor,
+    generated: torch.Tensor,
+    reference: torch.Tensor,
     bins: int = 200,
     max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE,
 ) -> float | None:
-    """Compute Jensen-Shannon divergence between robust-range histograms."""
-    left = metric_observations(left, max_observations)
-    right = metric_observations(right, max_observations)
-    if left.numel() == 0 or right.numel() == 0:
+    """Compare energies in a reference-defined histogram with explicit failure bins."""
+
+    def bounded(values: torch.Tensor) -> torch.Tensor:
+        values = values.detach().flatten().float().cpu()
+        if values.numel() <= max_observations:
+            return values
+        generator = torch.Generator().manual_seed(METRIC_SAMPLE_SEED)
+        indices = torch.randint(values.numel(), (max_observations,), generator=generator)
+        return values.index_select(0, indices)
+
+    generated, reference = bounded(generated), bounded(reference)
+    finite_reference = reference[torch.isfinite(reference)]
+    if generated.numel() == 0 or finite_reference.numel() == 0:
         return None
-    combined = torch.cat((left, right))
-    low, high = torch.quantile(combined, torch.tensor([0.005, 0.995])).tolist()
+    low, high = torch.quantile(finite_reference, torch.tensor([0.005, 0.995])).tolist()
     if not high > low:
         return 0.0
-    p = torch.histc(left, bins=bins, min=low, max=high).double().add(1e-12)
-    q = torch.histc(right, bins=bins, min=low, max=high).double().add(1e-12)
+
+    def counts(values: torch.Tensor) -> torch.Tensor:
+        finite = values[torch.isfinite(values)]
+        return torch.cat(
+            (
+                (finite < low).sum().view(1),
+                torch.histc(finite, bins=bins, min=low, max=high),
+                (finite > high).sum().view(1),
+                (~torch.isfinite(values)).sum().view(1),
+            )
+        ).double()
+
+    p = counts(generated).add(1e-12)
+    q = counts(reference).add(1e-12)
     p, q = p / p.sum(), q / q.sum()
     midpoint = 0.5 * (p + q)
     return float(0.5 * ((p * (p / midpoint).log()).sum() + (q * (q / midpoint).log()).sum()))
@@ -420,6 +440,175 @@ def plot_histograms(
     plt.close(figure)
 
 
+def plot_energy_distributions(
+    generated: torch.Tensor,
+    reference: torch.Tensor,
+    system_name: str,
+    output: Path,
+    energy_quantile: float,
+    minimum_pair_distance: float,
+    metric_sample_size: int = DEFAULT_METRIC_SAMPLE_SIZE,
+) -> None:
+    """Plot raw and validity-conditioned energies without hiding extreme tails."""
+    import os
+    import tempfile
+
+    os.environ.setdefault(
+        "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "particle-drift-matplotlib")
+    )
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+
+    system = get_system(system_name)
+    generated_energy = system.energy(generated).detach().cpu()
+    reference_energy = system.energy(reference).detach().cpu()
+    finite_reference = reference_energy[torch.isfinite(reference_energy)]
+    if not len(finite_reference):
+        raise ValueError("reference energies contain no finite values")
+    cutoff = torch.quantile(finite_reference, energy_quantile)
+
+    def valid_mask(samples: torch.Tensor, energy: torch.Tensor) -> torch.Tensor:
+        return (
+            torch.isfinite(energy)
+            & (energy <= cutoff)
+            & (minimum_pair_distances(samples).cpu() >= minimum_pair_distance)
+        )
+
+    generated_valid = valid_mask(generated, generated_energy)
+    reference_valid = valid_mask(reference, reference_energy)
+    output.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output / "energy_distributions.npz",
+        generated=generated_energy.numpy(),
+        reference=reference_energy.numpy(),
+        generated_valid=generated_valid.numpy(),
+        reference_valid=reference_valid.numpy(),
+        energy_cutoff=float(cutoff),
+        minimum_pair_distance=minimum_pair_distance,
+    )
+
+    low, high = float(finite_reference.min()), float(finite_reference.max())
+    if not high > low:
+        low, high = low - 1.0, high + 1.0
+    else:
+        padding = 0.02 * (high - low)
+        low, high = low - padding, high + padding
+
+    def probability_histogram(values: torch.Tensor, label: str, color: str) -> None:
+        finite_values = values[torch.isfinite(values)].numpy()
+        axes[0].hist(
+            finite_values,
+            bins=120,
+            range=(low, high),
+            weights=np.full(len(finite_values), 1.0 / max(len(values), 1)),
+            histtype="step",
+            linewidth=1.7,
+            label=label,
+            color=color,
+        )
+
+    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    probability_histogram(reference_energy, "test", "C0")
+    probability_histogram(generated_energy, "generated", "C1")
+    axes[0].set_yscale("log")
+    axes[0].axvline(float(cutoff), color="black", linestyle="--", label="test q99 cutoff")
+    axes[0].set(
+        xlabel="dimensionless energy",
+        ylabel="probability mass per bin (all samples)",
+        title=f"{system.name.upper()} all samples: reference-energy window",
+        xlim=(low, high),
+    )
+    axes[0].legend()
+    generated_in_window = ((generated_energy >= low) & (generated_energy <= high)).float().mean()
+    axes[0].text(
+        0.02,
+        0.02,
+        f"Generated mass in shown window: {float(generated_in_window):.4%}",
+        transform=axes[0].transAxes,
+        fontsize=9,
+    )
+
+    for values, label, color in (
+        (reference_energy, "test", "C0"),
+        (generated_energy, "generated", "C1"),
+    ):
+        observations = metric_observations(values, metric_sample_size).sort().values.numpy()
+        cumulative = np.arange(1, len(observations) + 1) / len(observations)
+        axes[1].plot(observations, cumulative, label=label, color=color)
+    axes[1].set_xscale("symlog", linthresh=max(1.0, (high - low) / 20))
+    axes[1].axvline(float(cutoff), color="black", linestyle="--", label="test q99 cutoff")
+    axes[1].set(
+        xlabel="dimensionless energy (symmetric-log scale)",
+        ylabel="empirical CDF",
+        title="All finite energies: full range",
+        ylim=(0, 1.01),
+    )
+    axes[1].legend()
+    figure.savefig(output / "energy_all_samples.png", dpi=180)
+    plt.close(figure)
+
+    retained_generated = generated_energy[generated_valid]
+    retained_reference = reference_energy[reference_valid]
+    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    if len(retained_generated) and len(retained_reference):
+        combined = torch.cat((retained_generated, retained_reference))
+        valid_low, valid_high = float(combined.min()), float(combined.max())
+        if not valid_high > valid_low:
+            valid_low, valid_high = valid_low - 1.0, valid_high + 1.0
+        else:
+            padding = 0.02 * (valid_high - valid_low)
+            valid_low, valid_high = valid_low - padding, valid_high + padding
+        for values, label, color in (
+            (retained_reference, "test valid", "C0"),
+            (retained_generated, "generated valid", "C1"),
+        ):
+            axes[0].hist(
+                values.numpy(),
+                bins=100,
+                range=(valid_low, valid_high),
+                density=True,
+                histtype="step",
+                linewidth=1.7,
+                label=label,
+                color=color,
+            )
+            observations = metric_observations(values, metric_sample_size).sort().values.numpy()
+            cumulative = np.arange(1, len(observations) + 1) / len(observations)
+            axes[1].plot(observations, cumulative, label=label, color=color)
+        axes[0].set_xlim(valid_low, valid_high)
+        axes[0].legend()
+        axes[1].legend()
+    else:
+        for axis in axes:
+            axis.text(0.5, 0.5, "No valid generated samples", ha="center", va="center")
+    generated_fraction = float(generated_valid.float().mean())
+    reference_fraction = float(reference_valid.float().mean())
+    axes[0].set(
+        xlabel="dimensionless energy",
+        ylabel="conditional density",
+        title=(
+            f"Valid samples only: generated {len(retained_generated):,}/{len(generated):,} "
+            f"({generated_fraction:.4%})"
+        ),
+    )
+    axes[1].set(
+        xlabel="dimensionless energy",
+        ylabel="empirical CDF",
+        title=(
+            f"Test retained {len(retained_reference):,}/{len(reference):,} "
+            f"({reference_fraction:.2%})"
+        ),
+        ylim=(0, 1.01),
+    )
+    figure.suptitle(
+        f"Validity: minimum distance ≥ {minimum_pair_distance:g}, energy ≤ {float(cutoff):.3f}"
+    )
+    figure.savefig(output / "energy_valid_samples.png", dpi=180)
+    plt.close(figure)
+
+
 def main() -> None:
     """Run checkpoint sampling and evaluation."""
     args = arguments()
@@ -464,6 +653,9 @@ def main() -> None:
                 "deterministic uniform configuration sampling without replacement"
             ),
             "sampling_seed": METRIC_SAMPLE_SEED,
+            "energy_histogram": (
+                "reference q0.005-q0.995 interior with underflow, overflow, and nonfinite bins"
+            ),
         },
         "runtime": device_summary(device),
         "sample_metrics": distribution_metrics(
@@ -509,6 +701,15 @@ def main() -> None:
         reference,
         system.name,
         args.output / "distributions.png",
+        metric_sample_size=args.metric_sample_size,
+    )
+    plot_energy_distributions(
+        generated,
+        reference,
+        system.name,
+        args.output,
+        args.valid_energy_quantile,
+        args.min_pair_distance,
         metric_sample_size=args.metric_sample_size,
     )
     if args.save_samples:

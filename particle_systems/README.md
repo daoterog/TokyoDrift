@@ -259,6 +259,11 @@ distribution, so systems with many particle pairs (such as LJ13 and LJ55) do not
 quantile size limit. The cap and sampling method are recorded in `metrics.json`; override the cap
 with `--metric-sample-size` when needed.
 
+Evaluation also writes `energy_all_samples.png`, combining a reference-window probability plot
+with a full-range symmetric-log CDF, and `energy_valid_samples.png`, conditioning both populations
+on the declared collision and energy criteria. The raw energies and validity masks are retained in
+`energy_distributions.npz`, allowing those figures to be revised without sampling the model again.
+
 ## GMM-40 benchmark
 
 ```bash
