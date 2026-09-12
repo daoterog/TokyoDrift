@@ -1,11 +1,11 @@
 # Particle-system drift benchmarks
 
-A self-contained implementation of coordinate- or descriptor-based, unnormalized Gaussian- or
+A self-contained implementation of coordinate- or descriptor-based Gaussian- or
 Laplacian-kernel drift on the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow
 Matching* (Klein, Krämer, and Noé, 2023). It deliberately excludes QM9 and all
 chemistry-specific code.
 
-The method uses data attraction minus generated-sample repulsion without dividing by local
+The method uses data attraction minus generated-sample repulsion, with optional division by local
 kernel mass. The generator remains E(n)-equivariant and maps centered noise directly to a
 particle configuration. With `drift.descriptors: true`, the kernel compares invariant sorted
 pair distances and its gradient is pulled back to particle coordinates. With `false` (also the
@@ -65,7 +65,7 @@ updated against each reference batch. Logging, validation, learning-rate and ban
 and checkpoint intervals are all expressed in epochs.
 
 `training.bandwidth` accepts a positive number, `"auto"` for the median-distance heuristic, or a
-nonempty list of positive numbers. With a list, the raw attraction-minus-repulsion kernel fields
+nonempty list of positive numbers. With a list, the per-bandwidth attraction-minus-repulsion fields
 are averaged with equal weight. Bandwidth schedules, when present, multiply every value in the
 list by the same epoch-dependent scale. Set `training.ema_decay` to `null` to train, validate,
 checkpoint, and evaluate without EMA weights; `1.0` is rejected because it would freeze EMA at
@@ -74,8 +74,32 @@ Gaussian and Laplacian kernels omit their bandwidth-dependent probability-densit
 their integrals therefore depend on bandwidth.
 The `drift.normalized: false` setting separately means that the density gradient is not divided by
 the local KDE mass (that is, the drift is not converted into a score).
+Set `drift.normalized: true` for kernel-mass-normalized drifting, or pass `--normalized` to
+training (`--no-normalized` explicitly disables it). For each query `x` and bandwidth `h`,
+the field becomes:
+
+```text
+V_h(x) = E_data[grad_x k_h(x, y)] / E_data[k_h(x, y)]
+       - repulsion * E_generated[grad_x k_h(x, y)] / E_generated[k_h(x, y)]
+V(x)   = mean_h V_h(x)
+```
+
+Each expectation averages over its own reference bank, using positive reference weights when
+provided and excluding the query's self entry from both repulsion numerator and denominator.
+Normalization happens before subtracting fields and averaging bandwidths. Denominators are
+clamped to the dtype's smallest positive normal value; a completely excluded bank or complete
+kernel underflow gives a zero field. Kernel-mass diagnostics still report the raw means.
+The switch is saved in parameters and checkpoints; changing it requires a new run rather than
+resuming a checkpoint with a different drift definition. Omitted settings retain the old behavior.
+
+Normalization changes field magnitudes, not the generator architecture or the symmetry of the
+comparison. With `descriptors: true`, normalized drift remains equivariant. To compare raw
+coordinates without invariance to independently rotating or relabeling reference configurations,
+set `descriptors: false` and use coordinate bandwidths (or `training.bandwidth: "auto"`).
+These are separate choices; toggling normalization alone keeps the current comparison space.
+
 Set `drift.kernel` to either `"gaussian"` or `"laplacian"`. Both kernels share the same
-scalar/list bandwidth, raw field averaging, attraction/repulsion, logging, and checkpoint
+scalar/list bandwidth, optional mass normalization, attraction/repulsion, logging, and checkpoint
 behavior.
 
 ### Descriptor comparison and bandwidths
@@ -102,7 +126,7 @@ particles. It also retains every pair distance used in the DW4 and LJ energy sum
 short-distance contacts that an energy scalar, radius alone, or coarse histogram would obscure.
 The descriptor kernel gradient is mapped back with the descriptor Jacobian transpose, so both
 attraction and repulsion produce coordinate updates and preserve the center. Reference samples
-remain detached. Kernels retain their existing unnormalized, equal-weight bandwidth averaging.
+remain detached. Per-bandwidth fields, optionally mass-normalized, are averaged with equal weight.
 
 Sorted distance lists are not a complete representation of geometry: different structures can
 have identical lists, and pair connectivity is lost. They compare configurations within each
@@ -149,6 +173,27 @@ The job stores its final checkpoint under `models/dw4/`. Every model run also ke
 resolved training parameters, including command-line overrides and derived bandwidths, in
 `models/dw4/runs/<job-id>/parameters.json`. Metrics, plots, and the combined job log are written
 under `results/dw4/<job-id>/`.
+
+The LJ55 job follows the same train/checkpoint/evaluate layout as LJ13:
+
+```bash
+# Submit from the repository root, using the existing LJ55 configuration.
+sbatch particle_systems/jobs/train_lj55.sh
+
+# Enable kernel-mass normalization without changing the generator or descriptors.
+sbatch particle_systems/jobs/train_lj55.sh --normalized
+
+# Training overrides are forwarded and recorded, including independent seeds.
+sbatch particle_systems/jobs/train_lj55.sh --normalized --seed 43
+```
+
+It uses `configs/lj55/gaussian.json` unchanged (64 epochs, batch/reference size 64, EMA 0.999,
+and LJ55 descriptor bandwidths). It requests one H100, nine CPUs and three hours, with 64 GB
+host memory for LJ55's larger evaluation arrays. Evaluation generates 500,000 configurations
+in batches of 64. Checkpoints go to `models/lj55/gaussian-<job-id>.pt`, resolved parameters to
+`models/lj55/runs/<job-id>/parameters.json`, and metrics, plots and the combined log to
+`results/lj55/<job-id>/`. Existing run IDs are rejected. The prepared LJ55 dataset and CUDA
+environment must already be available, as for the LJ13 job.
 
 ## Evaluate
 

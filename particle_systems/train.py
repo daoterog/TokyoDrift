@@ -1,4 +1,4 @@
-"""Train an equivariant generator with alignment-free unnormalized drift."""
+"""Train an equivariant generator with optional kernel-mass-normalized drift."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def resolve_ema_decay(training: dict) -> float | None:
 
 
 def resolve_drift_definition(config: dict) -> dict:
-    """Validate the descriptor toggle while retaining legacy coordinate configs."""
+    """Validate drift switches while retaining legacy unnormalized configs."""
     defaults = {
         "space": "particle_coordinates",
         "kernel": "gaussian",
@@ -133,25 +133,32 @@ def resolve_drift_definition(config: dict) -> dict:
     definition = {**defaults, **config.get("drift", {})}
     if type(definition["descriptors"]) is not bool:
         raise ValueError("drift.descriptors must be true or false")
+    if type(definition["normalized"]) is not bool:
+        raise ValueError("drift.normalized must be true or false")
     definition["kernel"] = str(definition["kernel"]).lower()
     if (
         definition.keys() != defaults.keys()
         or definition["space"] != "particle_coordinates"
-        or definition["normalized"] is not False
         or definition["kernel"] not in {"gaussian", "laplacian"}
     ):
         raise ValueError(
-            "drift requires particle-coordinate updates, normalized: false, "
-            "a gaussian or laplacian kernel, and an optional descriptors boolean"
+            "drift requires particle-coordinate updates, a gaussian or laplacian kernel, "
+            "and optional normalized and descriptors booleans"
         )
     return definition
 
 
 def arguments() -> argparse.Namespace:
     """Parse training command-line arguments."""
-    parser = argparse.ArgumentParser(description="Train an unnormalized-drift generator.")
+    parser = argparse.ArgumentParser(description="Train a particle drift generator.")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--normalized",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override drift.normalized: divide each field by its expected kernel value.",
+    )
     parser.add_argument("--epochs", type=int, default=None, help="Override config epochs.")
     parser.add_argument("--batch-size", type=int, default=None, help="Override config batch size.")
     parser.add_argument(
@@ -231,9 +238,11 @@ def save_checkpoint(
 
 
 def main() -> None:
-    """Run unnormalized-drift training from a JSON configuration."""
+    """Run particle drift training from a JSON configuration."""
     args = arguments()
     config = load_config(args.config)
+    if args.normalized is not None:
+        config.setdefault("drift", {})["normalized"] = args.normalized
     drift_definition = resolve_drift_definition(config)
     config["drift"] = drift_definition
     kernel = drift_definition["kernel"]
@@ -353,7 +362,9 @@ def main() -> None:
         final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
     )
     drift_class = DescriptorDrift if use_descriptors else DirectCoordinateDrift
-    drift = drift_class(initial_bandwidth, kernel=kernel).to(device)
+    drift = drift_class(
+        initial_bandwidth, kernel=kernel, normalized=drift_definition["normalized"]
+    ).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "shuffled"))
@@ -418,6 +429,7 @@ def main() -> None:
                 "initial_bandwidth": initial_bandwidth,
                 "final_bandwidth": final_bandwidth,
                 "kernel": kernel,
+                "normalized": drift_definition["normalized"],
                 "drift_space": "sorted_pair_distances"
                 if use_descriptors
                 else "particle_coordinates",

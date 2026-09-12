@@ -38,12 +38,13 @@ def descriptor_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> floa
 
 
 class DescriptorDrift(DirectCoordinateDrift):
-    """Pull back unnormalized descriptor KDE gradients to particle coordinates.
+    """Pull back descriptor KDE gradients to particle coordinates.
 
     For z = phi(x), the field is J_phi(x).T @ grad_z KDE(z). The inherited
     attraction, repulsion, self exclusion, bandwidth averaging and step interface
     therefore still return coordinate updates. References and output are detached;
-    no second derivatives through the generator are needed.
+    no second derivatives through the generator are needed. Optional kernel-mass
+    normalization is inherited and preserves the descriptor field's equivariance.
     """
 
     @torch.no_grad()

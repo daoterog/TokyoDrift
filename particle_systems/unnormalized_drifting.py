@@ -1,4 +1,4 @@
-"""Unnormalized radial-kernel drift in particle-coordinate space."""
+"""Radial-kernel drift with optional local kernel-mass normalization."""
 
 from __future__ import annotations
 
@@ -42,14 +42,19 @@ class DirectCoordinateDrift(nn.Module):
     are averaged in the same way. A scalar remains supported as the
     single-bandwidth case.
 
-    No division by the local kernel mass is performed. Consequently, this is an
-    unnormalized density gradient rather than a KDE score. Coordinates are
+    By default no division by the local kernel mass is performed. With
+    ``normalized=True``, each attraction and repulsion field is divided by its
+    own expected kernel value per query and bandwidth before subtraction and
+    bandwidth averaging. This gives a difference of KDE scores. Coordinates are
     compared as flattened arrays, so particle ordering and global orientation
     must be meaningful and consistent across configurations.
     """
 
     def __init__(
-        self, bandwidth: float | Sequence[float], kernel: str = "gaussian"
+        self,
+        bandwidth: float | Sequence[float],
+        kernel: str = "gaussian",
+        normalized: bool = False,
     ) -> None:
         """Initialize a direct-coordinate Gaussian or Laplacian drift."""
         super().__init__()
@@ -57,6 +62,9 @@ class DirectCoordinateDrift(nn.Module):
         if kernel not in {"gaussian", "laplacian"}:
             raise ValueError("kernel must be 'gaussian' or 'laplacian'")
         self.kernel = kernel
+        if type(normalized) is not bool:
+            raise ValueError("normalized must be true or false")
+        self.normalized = normalized
         self.bandwidth = bandwidth
 
     @property
@@ -148,6 +156,15 @@ class DirectCoordinateDrift(nn.Module):
 
         return torch.stack(fields), torch.stack(masses)
 
+    def _normalize_fields(self, fields: torch.Tensor, masses: torch.Tensor) -> torch.Tensor:
+        """Optionally divide each field by its matching empirical kernel mean."""
+        if not self.normalized:
+            return fields
+        # A fully excluded bank or complete kernel underflow contributes zero.
+        # Use tiny, not eps: small representable kernel means still need normalization.
+        denominator = masses.clamp_min(torch.finfo(masses.dtype).tiny)
+        return fields / denominator[..., None, None]
+
     @torch.no_grad()
     def _field(
         self,
@@ -156,9 +173,9 @@ class DirectCoordinateDrift(nn.Module):
         self_indices: torch.Tensor | None = None,
         reference_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return bandwidth-averaged raw field and kernel mass diagnostics."""
+        """Return the selected bandwidth-averaged field and raw kernel masses."""
         fields, masses = self._fields(query, references, self_indices, reference_weights)
-        return fields.mean(dim=0), masses.mean(dim=0)
+        return self._normalize_fields(fields, masses).mean(dim=0), masses.mean(dim=0)
 
     def forward(
         self,
@@ -182,6 +199,8 @@ class DirectCoordinateDrift(nn.Module):
         negative_fields, negative_masses = self._fields(
             generated, negative_references, self_indices=self_indices
         )
+        positive_fields = self._normalize_fields(positive_fields, positive_masses)
+        negative_fields = self._normalize_fields(negative_fields, negative_masses)
         fields = positive_fields - repulsion * negative_fields
         temperature_rms = fields.square().mean(dim=(1, 2, 3)).sqrt()
         drift = fields.mean(dim=0)
@@ -208,7 +227,7 @@ class DirectCoordinateDrift(nn.Module):
         repulsion: float = 1.0,
         positive_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Apply one explicit unnormalized-drift step to generated positions."""
+        """Apply one explicit step using the selected drift normalization."""
         if step_size <= 0:
             raise ValueError("step_size must be positive")
         drift, metrics = self(
