@@ -44,12 +44,21 @@ def load_dataset(path: Path, split: str) -> tuple[torch.Tensor, dict[str, Any]]:
 def build_model(config: dict[str, Any]) -> ParticleGenerator:
     """Construct a particle generator from a resolved configuration."""
     model = config["model"]
+    if config["system"] == "aldp" and model.get("fixed_atom_identity") is not True:
+        raise ValueError(
+            "alanine requires model.fixed_atom_identity: true for its labeled topology"
+        )
     return ParticleGenerator(
         feature_dim=int(model["feature_dim"]),
         hidden_dim=int(model["hidden_dim"]),
         layers=int(model["layers"]),
         radial_basis=int(model["radial_basis"]),
         max_distance=float(model["max_distance"]),
+        fixed_atom_identity=(
+            get_system(config["system"]).particles
+            if model.get("fixed_atom_identity", False)
+            else None
+        ),
     )
 
 

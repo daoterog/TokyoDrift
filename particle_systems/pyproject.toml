@@ -11,6 +11,7 @@ dependencies = [
 cpu = ["torch==2.9.0"]
 cuda = ["torch==2.9.0"]
 dev = ["ruff>=0.12,<1"]
+alanine = ["h5py>=3.12,<4", "openmm>=8.2,<9"]
 
 [tool.uv]
 package = false

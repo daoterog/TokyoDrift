@@ -47,6 +47,11 @@ class DescriptorDrift(DirectCoordinateDrift):
     normalization is inherited and preserves the descriptor field's equivariance.
     """
 
+    @staticmethod
+    def descriptors(positions: torch.Tensor) -> torch.Tensor:
+        """Return comparison features; molecular subclasses preserve atom labels."""
+        return particle_descriptors(positions)
+
     @torch.no_grad()
     def _fields(
         self,
@@ -57,11 +62,11 @@ class DescriptorDrift(DirectCoordinateDrift):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute kernel fields without a [query, reference, descriptor] tensor."""
         self._validate_inputs(query, references)
-        reference_features = particle_descriptors(references.detach())
+        reference_features = self.descriptors(references.detach())
         # Enable only the descriptor Jacobian, including when called under no_grad.
         with torch.enable_grad():
             positions = query.detach().requires_grad_(True)
-            features = particle_descriptors(positions)
+            features = self.descriptors(positions)
         query_features = features.detach()
         distance = torch.cdist(
             query_features, reference_features, compute_mode="donot_use_mm_for_euclid_dist"

@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .alanine import AlanineDrift
 from .descriptors import DescriptorDrift, descriptor_bandwidth
 from .io import build_model, device_summary, load_config, load_dataset, select_device
 from .systems import ParticleSystem, get_system
@@ -275,17 +276,33 @@ def main() -> None:
         raise ValueError("config and dataset systems differ")
     model = build_model(config).to(device)
     training = config["training"]
+    if system.name == "aldp":
+        if metadata.get("coordinate_units") != "angstrom" or "geometry_rules" not in metadata:
+            raise ValueError("prepare alanine data with particle_systems.prepare_alanine first")
+        training["geometry_rules"] = metadata["geometry_rules"]
     ema_decay = resolve_ema_decay(training)
     ema = copy.deepcopy(model).eval() if ema_decay is not None else None
     if "steps" in training:
         raise ValueError("training.steps has been replaced by training.epochs")
     validation_holdout = int(training.get("validation_holdout", 0))
+    validation_split = training.get("validation_split")
+    if validation_split and validation_holdout:
+        raise ValueError("choose either a validation split or a training holdout")
     validator = None
-    if validation_holdout:
-        if validation_holdout >= len(train_data):
-            raise ValueError("validation_holdout must be smaller than the training split")
-        validation_data = train_data[-validation_holdout:]
-        train_data = train_data[:-validation_holdout]
+    if validation_holdout or validation_split:
+        if validation_split:
+            if validation_split != "validation":
+                raise ValueError("validation_split must be 'validation', never the test split")
+            validation_data, validation_metadata = load_dataset(
+                Path(config["data"]), validation_split
+            )
+            if validation_metadata["system"] != system.name:
+                raise ValueError("validation dataset system differs")
+        else:
+            if validation_holdout >= len(train_data):
+                raise ValueError("validation_holdout must be smaller than the training split")
+            validation_data = train_data[-validation_holdout:]
+            train_data = train_data[:-validation_holdout]
         validator = ValidationEvaluator.build(
             validation_data,
             system,
@@ -342,8 +359,15 @@ def main() -> None:
             torch.mps.set_rng_state(checkpoint["mps_rng"])
     bandwidth_config = training["bandwidth"]
     if bandwidth_config == "auto":
-        estimate_bandwidth = descriptor_bandwidth if use_descriptors else median_bandwidth
-        base_bandwidths = (estimate_bandwidth(train_data),)
+        if system.name == "aldp" and use_descriptors:
+            distances = torch.pdist(AlanineDrift.descriptors(train_data[:1024]))
+            positive_distances = distances[distances > 0]
+            if not len(positive_distances):
+                raise ValueError("cannot estimate bandwidth from identical molecular descriptors")
+            base_bandwidths = (float(positive_distances.median()),)
+        else:
+            estimate_bandwidth = descriptor_bandwidth if use_descriptors else median_bandwidth
+            base_bandwidths = (estimate_bandwidth(train_data),)
     elif isinstance(bandwidth_config, list):
         base_bandwidths = tuple(float(value) for value in bandwidth_config)
     else:
@@ -362,12 +386,16 @@ def main() -> None:
         final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
     )
     drift_class = DescriptorDrift if use_descriptors else DirectCoordinateDrift
+    if system.name == "aldp" and use_descriptors:
+        drift_class = AlanineDrift
     drift = drift_class(
         initial_bandwidth, kernel=kernel, normalized=drift_definition["normalized"]
     ).to(device)
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "shuffled"))
+    if system.energy is None and reference_sampling == "energy-stratified":
+        raise ValueError("energy stratification is not available for molecular training")
     quantiles = list(training.get("positive_reference_energy_quantiles", (0.5, 0.9, 0.99)))
     stratified_references = (
         EnergyStratifiedReferenceSampler.build(train_data, system, quantiles)
@@ -430,7 +458,9 @@ def main() -> None:
                 "final_bandwidth": final_bandwidth,
                 "kernel": kernel,
                 "normalized": drift_definition["normalized"],
-                "drift_space": "sorted_pair_distances"
+                "drift_space": (
+                    "labeled_pair_distances" if system.name == "aldp" else "sorted_pair_distances"
+                )
                 if use_descriptors
                 else "particle_coordinates",
                 "reference_radius": reference_radius,
@@ -498,15 +528,15 @@ def main() -> None:
                 update_ema(ema, model, ema_decay)
             global_step += 1
 
-            with torch.no_grad():
-                energy = system.energy(generated)
             batch_metrics = {
                 "loss": float(loss.detach()),
                 "gradient_norm": float(gradient_norm.detach()),
-                "energy_mean": float(energy.mean().detach()),
                 "generated_radius": float(generated_radius),
                 **{name: float(value) for name, value in drift_metrics.items()},
             }
+            if system.energy is not None:
+                with torch.no_grad():
+                    batch_metrics["energy_mean"] = float(system.energy(generated).mean())
             for name, value in batch_metrics.items():
                 epoch_totals[name] = epoch_totals.get(name, 0.0) + value
 
@@ -533,7 +563,7 @@ def main() -> None:
             print(json.dumps(validation_record))
             with (outdir / "validation.jsonl").open("a") as stream:
                 stream.write(json.dumps(validation_record) + "\n")
-            score = validation_metrics["energy_wasserstein_1"]
+            score = validation_metrics[training.get("validation_metric", "energy_wasserstein_1")]
             if score < best_validation_score:
                 best_validation_score = score
                 save_checkpoint(

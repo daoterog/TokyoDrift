@@ -17,7 +17,7 @@
     "max_distance": 4.0
   },
   "training": {
-    "epochs": 300,
+    "epochs": 30,
     "batch_size": 64,
     "positive_references": 64,
     "coordinate_noise_scale": 1.0,

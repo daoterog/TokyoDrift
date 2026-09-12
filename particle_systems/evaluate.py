@@ -430,6 +430,8 @@ def main() -> None:
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = checkpoint["config"]
     system = get_system(config["system"])
+    if system.name == "aldp":
+        raise ValueError("use python -m particle_systems.evaluate_alanine for molecular metrics")
     reference, metadata = load_dataset(Path(config["data"]), "test")
     if metadata["system"] != system.name:
         raise ValueError("checkpoint and test dataset systems differ")

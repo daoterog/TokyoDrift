@@ -67,10 +67,17 @@ class ParticleGenerator(nn.Module):
         layers: int = 4,
         radial_basis: int = 16,
         max_distance: float = 8.0,
+        fixed_atom_identity: int | None = None,
     ) -> None:
         """Initialize a stack of complete-graph EGNN layers."""
         super().__init__()
         self.feature_dim = feature_dim
+        if fixed_atom_identity is not None and feature_dim != fixed_atom_identity:
+            raise ValueError("fixed atom identity requires feature_dim equal to atom count")
+        self.register_buffer(
+            "atom_identity",
+            torch.eye(fixed_atom_identity) if fixed_atom_identity is not None else None,
+        )
         self.embedding = _mlp(feature_dim, hidden_dim, hidden_dim)
         self.layers = nn.ModuleList(
             EGNNLayer(hidden_dim, radial_basis, max_distance) for _ in range(layers)
@@ -79,6 +86,11 @@ class ParticleGenerator(nn.Module):
     def forward(self, coordinate_noise: torch.Tensor, feature_noise: torch.Tensor) -> torch.Tensor:
         """Map coordinate and scalar Gaussian noise to centered positions."""
         positions = center(coordinate_noise)
+        if self.atom_identity is not None:
+            if positions.shape[1] != len(self.atom_identity):
+                raise ValueError("coordinates do not match the configured atom identities")
+            # Fixed topology labels distinguish chemically inequivalent atom slots.
+            feature_noise = self.atom_identity.unsqueeze(0).expand(len(positions), -1, -1)
         features = self.embedding(feature_noise)
         for layer in self.layers:
             features, positions = layer(features, positions)

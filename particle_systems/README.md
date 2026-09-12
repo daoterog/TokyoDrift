@@ -1,9 +1,9 @@
 # Particle-system drift benchmarks
 
 A self-contained implementation of coordinate- or descriptor-based Gaussian- or
-Laplacian-kernel drift on the DW4, LJ13, and LJ55 particle systems from *Equivariant Flow
-Matching* (Klein, Krämer, and Noé, 2023). It deliberately excludes QM9 and all
-chemistry-specific code.
+Laplacian-kernel drift on DW4, LJ13, LJ55, and fixed-topology alanine dipeptide. The particle
+benchmarks follow *Equivariant Flow Matching* (Klein, Krämer, and Noé, 2023); alanine uses the
+published 300 K FAB ff96/OBC1 implicit-solvent trajectory.
 
 The method uses data attraction minus generated-sample repulsion, with optional division by local
 kernel mass. The generator remains E(n)-equivariant and maps centered noise directly to a
@@ -194,6 +194,54 @@ in batches of 64. Checkpoints go to `models/lj55/gaussian-<job-id>.pt`, resolved
 `models/lj55/runs/<job-id>/parameters.json`, and metrics, plots and the combined log to
 `results/lj55/<job-id>/`. Existing run IDs are rejected. The prepared LJ55 dataset and CUDA
 environment must already be available, as for the LJ13 job.
+
+## Alanine dipeptide
+
+Alanine uses the open [Zenodo 6993124](https://zenodo.org/records/6993124) Cartesian-coordinate
+release: one million training frames, one million validation frames and ten million test frames
+from replica-exchange MD at 300 K. The preparation job downloads the three official HDF5 files,
+checks their published MD5 hashes and validates their topology. It deterministically retains
+100,000 training, 10,000 validation and 100,000 test frames by default, converts nanometres to
+angstroms, centers each configuration, and records source indices and provenance. The separate
+official files preserve the authors' split boundaries.
+
+```bash
+# Installs the locked alanine dependencies and prepares particle_systems/data/aldp.npz.
+sbatch particle_systems/jobs/download_alanine.sh
+
+# Trains, selects a checkpoint on validation data, and evaluates once on test data.
+sbatch particle_systems/jobs/train_alanine.sh
+
+# Optional normalized-drift comparison.
+sbatch particle_systems/jobs/train_alanine.sh --normalized --seed 43
+```
+
+The molecular kernel compares all 231 labeled pair distances in their fixed topology order.
+Unlike the identical-particle descriptor, it does not sort or permit atom permutations. Fixed
+one-hot atom identities condition the existing EGNN; coordinates remain the only random input.
+The starting bandwidths `[0.1, 0.3, 0.6, 1.8]` cover local structure and the initial generator.
+They are measured starting values rather than tuned results.
+
+Validation chooses the minimum `phi_psi_JS + (1 - valid_fraction)`, where validity combines
+finite coordinates, training-calibrated bond and angle ranges, nonbonded collision avoidance,
+defined backbone torsions, and the training-set chirality. The test evaluator writes:
+
+- raw and validity-filtered periodic φ/ψ JS, forward KL and total-variation distances;
+- Ramachandran and empirical free-energy plots on fixed shared bins;
+- labeled bond-length and bond-angle Wasserstein-1 distances;
+- geometry, collision and chirality acceptance rates over all 500,000 generated samples;
+- AMBER ff96/OBC1 potential-energy metrics on deterministic 10,000-sample generated and test
+  subsets, including raw tails, q99 validity and filtered observables.
+
+The AMBER topology is pinned by commit and SHA-256. Energies use unconstrained OBC1/NoCutoff at
+300 K and are reported as `U/(R*T)` without clipping. Evaluation explicitly records subset sizes,
+units, binning, filters and unavailable density metrics. This direct generator has no tractable
+proposal density, so NLL and importance-weight ESS are not claimed.
+
+Pair distances and the current E(n) generator are reflection symmetric, whereas alanine is
+chiral. Expect the raw generator to contain mirror structures; the chirality acceptance rate and
+both raw and filtered Ramachandran distributions make that failure visible. Filtering is not
+reweighting, so filtered quality must always be read together with its retained fraction.
 
 ## Evaluate
 

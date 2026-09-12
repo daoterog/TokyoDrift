@@ -52,12 +52,21 @@ class ParticleSystem:
     name: str
     particles: int
     dimensions: int
-    energy: EnergyFunction
+    energy: EnergyFunction | None
     sources: tuple[DatasetSource, ...]
     paper_reference: dict[str, dict[str, float]]
 
 
 SYSTEMS = {
+    "aldp": ParticleSystem(
+        name="aldp",
+        particles=22,
+        dimensions=3,
+        # Molecular energies use the matching OpenMM topology in evaluate_alanine.
+        energy=None,
+        sources=(),
+        paper_reference={},
+    ),
     "dw4": ParticleSystem(
         name="dw4",
         particles=4,

@@ -23,6 +23,7 @@ class ValidationEvaluator:
     eta: float
     repulsion: float
     system: ParticleSystem
+    geometry_rules: dict | None = None
 
     @classmethod
     def build(
@@ -44,9 +45,7 @@ class ValidationEvaluator:
         coordinate_noise = coordinate_scale * torch.randn(
             samples, system.particles, system.dimensions, generator=generator
         )
-        feature_noise = torch.randn(
-            samples, system.particles, feature_dim, generator=generator
-        )
+        feature_noise = torch.randn(samples, system.particles, feature_dim, generator=generator)
         indices = torch.randperm(len(reference), generator=generator)[:positive_references]
         return cls(
             reference=reference,
@@ -57,6 +56,7 @@ class ValidationEvaluator:
             eta=float(training["eta"]),
             repulsion=float(training["repulsion"]),
             system=system,
+            geometry_rules=training.get("geometry_rules"),
         )
 
     @torch.no_grad()
@@ -91,6 +91,15 @@ class ValidationEvaluator:
             torch.arange(len(drift_batch), device=device),
             self.repulsion,
         )
+        if self.system.name == "aldp":
+            from .alanine_metrics import validation_metrics
+
+            if self.geometry_rules is None:
+                raise ValueError("alanine validation requires training-calibrated geometry rules")
+            return {
+                "drift_loss": float((self.eta * field).square().mean()),
+                **validation_metrics(generated, self.reference, self.geometry_rules),
+            }
         metrics = distribution_metrics(generated, self.reference, self.system.name)
         return {
             "drift_loss": float((self.eta * field).square().mean()),
