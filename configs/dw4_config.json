@@ -6,7 +6,7 @@
     "normalized": false
   },
   "data": "data/dw4/dataset.npz",
-  "output": "results/dw4/gaussian-large/checkpoints",
+  "output": "results/dw4/checkpoints",
   "seed": 42,
   "model": {
     "architecture": "egnn",
