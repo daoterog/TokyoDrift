@@ -9,7 +9,7 @@ import torch
 
 from data.prepare import select_rows
 from data.systems import center, dw4_energy, get_system, lj_energy
-from drifting import DirectCoordinateDrift, median_bandwidth
+from drifting import Drifting, median_bandwidth
 from evaluate import (
     histogram_js,
     metric_observations,
@@ -157,7 +157,7 @@ class ReferenceSamplingTests(unittest.TestCase):
     def test_uniform_positive_weights_match_the_empirical_mean_field(self) -> None:
         query = center(torch.randn(2, 4, 2))
         references = center(torch.randn(5, 4, 2))
-        drift = DirectCoordinateDrift(1.0)
+        drift = Drifting(1.0)
         ordinary, _ = drift(query, references, repulsion=0.0)
         weighted, _ = drift(
             query,
@@ -172,7 +172,7 @@ class DriftTests(unittest.TestCase):
     def test_field_matches_analytical_gaussian_gradient(self) -> None:
         query = torch.tensor([[[-0.5], [0.5]]])
         reference = torch.tensor([[[-1.5], [1.5]]])
-        field, _ = DirectCoordinateDrift(2.0)(query, reference, repulsion=0.0)
+        field, _ = Drifting(2.0)(query, reference, repulsion=0.0)
         kernel = torch.exp(torch.tensor(-1.0 / 4.0))
         expected = kernel * (reference - query) / 4.0
         self.assertTrue(torch.allclose(field, expected))
@@ -181,7 +181,7 @@ class DriftTests(unittest.TestCase):
         coordinate = torch.linspace(-10.0, 10.0, 20_001)
         query = torch.stack((-coordinate / 2.0**0.5, coordinate / 2.0**0.5), dim=1).unsqueeze(-1)
         reference = torch.zeros(1, 2, 1)
-        _, kernel_density = DirectCoordinateDrift(1.0)._fields(query, reference)
+        _, kernel_density = Drifting(1.0)._fields(query, reference)
         integral = torch.trapezoid(kernel_density.squeeze(0), coordinate)
         expected = torch.sqrt(torch.tensor(2.0 * torch.pi))
         self.assertTrue(torch.allclose(integral, expected, atol=1e-5))
@@ -189,7 +189,7 @@ class DriftTests(unittest.TestCase):
     def test_laplacian_field_matches_analytical_density_gradient(self) -> None:
         query = torch.tensor([[[-0.5], [0.5]]])
         reference = torch.tensor([[[-1.5], [1.5]]])
-        field, _ = DirectCoordinateDrift(2.0, kernel="laplacian")(query, reference, repulsion=0.0)
+        field, _ = Drifting(2.0, kernel="laplacian")(query, reference, repulsion=0.0)
         distance = torch.sqrt(torch.tensor(2.0))
         kernel = torch.exp(-distance / 2.0)
         expected = kernel * (reference - query) / (2.0 * distance)
@@ -199,7 +199,7 @@ class DriftTests(unittest.TestCase):
         coordinate = torch.linspace(-20.0, 20.0, 40_001)
         query = torch.stack((-coordinate / 2.0**0.5, coordinate / 2.0**0.5), dim=1).unsqueeze(-1)
         reference = torch.zeros(1, 2, 1)
-        _, kernel_density = DirectCoordinateDrift(1.0, kernel="laplacian")._fields(query, reference)
+        _, kernel_density = Drifting(1.0, kernel="laplacian")._fields(query, reference)
         integral = torch.trapezoid(kernel_density.squeeze(0), coordinate)
         self.assertTrue(torch.allclose(integral, torch.tensor(2.0), atol=1e-5))
 
@@ -207,14 +207,10 @@ class DriftTests(unittest.TestCase):
         query = torch.tensor([[[-0.5], [0.5]], [[-1.0], [1.0]]])
         references = torch.tensor([[[-1.5], [1.5]], [[-2.0], [2.0]]])
         bandwidths = (0.5, 1.0, 2.0)
-        combined, _ = DirectCoordinateDrift(bandwidths, kernel="laplacian")(
-            query, references, repulsion=0.0
-        )
+        combined, _ = Drifting(bandwidths, kernel="laplacian")(query, references, repulsion=0.0)
         individual = torch.stack(
             [
-                DirectCoordinateDrift(value, kernel="laplacian")(query, references, repulsion=0.0)[
-                    0
-                ]
+                Drifting(value, kernel="laplacian")(query, references, repulsion=0.0)[0]
                 for value in bandwidths
             ]
         )
@@ -223,18 +219,15 @@ class DriftTests(unittest.TestCase):
 
     def test_unknown_kernel_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            DirectCoordinateDrift(1.0, kernel="triangular")
+            Drifting(1.0, kernel="triangular")
 
     def test_multiple_bandwidths_average_their_raw_fields(self) -> None:
         query = torch.tensor([[[0.0]], [[0.5]]])
         references = torch.tensor([[[1.0]], [[2.0]], [[3.0]]])
         bandwidths = (0.5, 1.0, 2.0)
-        combined_field, combined_metrics = DirectCoordinateDrift(bandwidths)(
-            query, references, repulsion=0.0
-        )
+        combined_field, combined_metrics = Drifting(bandwidths)(query, references, repulsion=0.0)
         individual = [
-            DirectCoordinateDrift(bandwidth)(query, references, repulsion=0.0)
-            for bandwidth in bandwidths
+            Drifting(bandwidth)(query, references, repulsion=0.0) for bandwidth in bandwidths
         ]
         individual_fields = torch.stack([field for field, _ in individual])
         individual_rms = individual_fields.square().mean(dim=(1, 2, 3)).sqrt()
@@ -250,14 +243,14 @@ class DriftTests(unittest.TestCase):
 
     def test_multiple_bandwidths_must_be_nonempty_and_positive(self) -> None:
         with self.assertRaises(ValueError):
-            DirectCoordinateDrift([])
+            Drifting([])
         with self.assertRaises(ValueError):
-            DirectCoordinateDrift([0.5, 0.0])
+            Drifting([0.5, 0.0])
 
     def test_zero_field_at_one_temperature_does_not_produce_nan(self) -> None:
         query = torch.tensor([[[0.0]]])
         references = torch.tensor([[[10.0]]])
-        field, metrics = DirectCoordinateDrift([1e-6, 10.0])(query, references, repulsion=0.0)
+        field, metrics = Drifting([1e-6, 10.0])(query, references, repulsion=0.0)
         self.assertTrue(torch.isfinite(field).all())
         self.assertTrue(torch.isfinite(metrics["drift_rms"]))
 
@@ -269,7 +262,7 @@ class DriftTests(unittest.TestCase):
         query = torch.tensor([[[-0.5, 0.0], [0.5, 0.0]]])
         near = torch.tensor([[[-1.0, 0.0], [1.0, 0.0]]])
         far = torch.tensor([[[-5.0, 0.0], [5.0, 0.0]]])
-        drift = DirectCoordinateDrift(1.0)
+        drift = Drifting(1.0)
         near_field, _ = drift(query, near, repulsion=0.0)
         far_field, _ = drift(query, far, repulsion=0.0)
         self.assertLess(far_field.norm(), near_field.norm())
@@ -277,7 +270,7 @@ class DriftTests(unittest.TestCase):
     def test_attraction_expands_an_undersized_configuration(self) -> None:
         query = center(torch.tensor([[[-0.5, -0.5], [-0.5, 0.5], [0.5, -0.5], [0.5, 0.5]]]))
         reference = 3.0 * query
-        field, _ = DirectCoordinateDrift(2.0)(query, reference, repulsion=0.0)
+        field, _ = Drifting(2.0)(query, reference, repulsion=0.0)
         self.assertGreater(torch.sum(field * query), 0.0)
 
     def test_field_is_equivariant_when_query_and_references_transform_together(self) -> None:
@@ -286,7 +279,7 @@ class DriftTests(unittest.TestCase):
         references = center(torch.randn(5, 4, 2))
         permutation = torch.tensor([2, 0, 3, 1])
         rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        drift = DirectCoordinateDrift(2.0)
+        drift = Drifting(2.0)
         expected, _ = drift(query, references, repulsion=0.0)
         actual, _ = drift(
             query[:, permutation] @ rotation.T,
@@ -300,7 +293,7 @@ class DriftTests(unittest.TestCase):
     def test_field_depends_on_reference_particle_order(self) -> None:
         query = torch.tensor([[[0.0, 0.0], [1.0, 0.0]]])
         references = torch.tensor([[[0.0, 1.0], [2.0, 0.0]]])
-        drift = DirectCoordinateDrift(2.0)
+        drift = Drifting(2.0)
         ordered, _ = drift(query, references, repulsion=0.0)
         permuted, _ = drift(query, references[:, [1, 0]], repulsion=0.0)
         self.assertFalse(torch.allclose(ordered, permuted))
@@ -308,13 +301,13 @@ class DriftTests(unittest.TestCase):
     def test_drift_preserves_center(self) -> None:
         query = center(torch.randn(3, 4, 2))
         references = center(torch.randn(5, 4, 2))
-        field, _ = DirectCoordinateDrift(2.0)(query, references, repulsion=0.0)
+        field, _ = Drifting(2.0)(query, references, repulsion=0.0)
         self.assertTrue(torch.allclose(field.mean(dim=1), torch.zeros(3, 2), atol=1e-6))
 
     def test_step_applies_the_requested_field_scale(self) -> None:
         query = torch.tensor([[[0.0]]])
         reference = torch.tensor([[[1.0]]])
-        drift = DirectCoordinateDrift(2.0)
+        drift = Drifting(2.0)
         field, _ = drift(query, reference, repulsion=0.0)
         updated, _ = drift.step(query, reference, step_size=0.3, repulsion=0.0)
         self.assertTrue(torch.allclose(updated, query + 0.3 * field))

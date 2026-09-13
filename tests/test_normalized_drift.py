@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import torch
 
-from drifting import DirectCoordinateDrift
+from drifting import Drifting
 from train import main as train_main
 from train import resolve_drift_definition
 from utils.descriptors import DescriptorDrift, particle_descriptors
@@ -25,7 +25,7 @@ class NormalizedDriftTests(unittest.TestCase):
         self_indices = torch.tensor([4, -1, 1])
         negative[4], negative[1] = samples[0], samples[2]
         positive_weights = torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.float64) / 15
-        for drift_class in (DirectCoordinateDrift, DescriptorDrift):
+        for drift_class in (Drifting, DescriptorDrift):
             for kernel in ("gaussian", "laplacian"):
                 with self.subTest(drift_class=drift_class.__name__, kernel=kernel):
                     query = samples.clone().requires_grad_()
@@ -76,14 +76,14 @@ class NormalizedDriftTests(unittest.TestCase):
         query = torch.tensor([[[0.0]]])
         reference = torch.tensor([[[10.0]]])
         # exp(-50) is representable but much smaller than float32 eps.
-        field, metrics = DirectCoordinateDrift(1.0, normalized=True)(query, reference)
+        field, metrics = Drifting(1.0, normalized=True)(query, reference)
         torch.testing.assert_close(field, reference - query)
         self.assertEqual(float(metrics["negative_kernel_mass"]), 0)
-        raw, _ = DirectCoordinateDrift(1.0)(query, reference)
+        raw, _ = Drifting(1.0)(query, reference)
         self.assertLess(float(raw.abs().max()), 1e-19)
 
     def test_underflow_and_coincident_singletons_remain_finite(self):
-        for drift_class in (DirectCoordinateDrift, DescriptorDrift):
+        for drift_class in (Drifting, DescriptorDrift):
             for kernel in ("gaussian", "laplacian"):
                 query = torch.zeros(1, 4, 3)
                 references = torch.arange(12, dtype=query.dtype).reshape_as(query)
@@ -113,7 +113,7 @@ class NormalizedDriftTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolve_drift_definition({"drift": {"normalized": value}})
             with self.assertRaises(ValueError):
-                DirectCoordinateDrift(1.0, normalized=value)
+                Drifting(1.0, normalized=value)
 
     def test_lj55_training_override_checkpoint_and_resume(self):
         config_path = Path(__file__).resolve().parents[1] / "data/lj55/gaussian.json"

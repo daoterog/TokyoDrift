@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from drifting import DirectCoordinateDrift
+from drifting import Drifting
 
 
 def particle_descriptors(positions: torch.Tensor) -> torch.Tensor:
@@ -37,7 +37,7 @@ def descriptor_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> floa
     return float(positive.median())
 
 
-class DescriptorDrift(DirectCoordinateDrift):
+class DescriptorDrift(Drifting):
     """Pull back descriptor KDE gradients to particle coordinates.
 
     For z = phi(x), the field is J_phi(x).T @ grad_z KDE(z). The inherited

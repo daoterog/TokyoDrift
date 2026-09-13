@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from data.systems import ParticleSystem
-from drifting import DirectCoordinateDrift
+from drifting import Drifting
 from evaluate import distribution_metrics
 
 
@@ -79,7 +79,7 @@ class ValidationEvaluator:
         return torch.cat(values)
 
     def evaluate(
-        self, model: torch.nn.Module, drift: DirectCoordinateDrift, device: torch.device
+        self, model: torch.nn.Module, drift: Drifting, device: torch.device
     ) -> dict[str, float]:
         """Return fixed drift loss and held-out distribution metrics."""
         generated = self.generated_samples(model, device)

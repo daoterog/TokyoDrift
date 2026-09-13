@@ -24,7 +24,7 @@ def median_bandwidth(samples: torch.Tensor, max_samples: int = 1024) -> float:
     return float(positive.median())
 
 
-class DirectCoordinateDrift(nn.Module):
+class Drifting(nn.Module):
     """Multi-bandwidth radial-kernel drift without invariant descriptors.
 
     The Gaussian and Laplacian kernels omit bandwidth-dependent probability-
@@ -56,7 +56,7 @@ class DirectCoordinateDrift(nn.Module):
         kernel: str = "gaussian",
         normalized: bool = False,
     ) -> None:
-        """Initialize a direct-coordinate Gaussian or Laplacian drift."""
+        """Initialize Gaussian or Laplacian drifting in coordinate space."""
         super().__init__()
         kernel = kernel.lower()
         if kernel not in {"gaussian", "laplacian"}:

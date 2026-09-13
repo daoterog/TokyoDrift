@@ -15,7 +15,7 @@ import torch
 
 from data.alanine_dipeptide.system import AlanineDrift
 from data.systems import ParticleSystem, get_system
-from drifting import DirectCoordinateDrift, median_bandwidth
+from drifting import Drifting, median_bandwidth
 from utils.descriptors import DescriptorDrift, descriptor_bandwidth
 from utils.io import build_model, device_summary, load_config, load_dataset, select_device
 from validation import ValidationEvaluator
@@ -385,7 +385,7 @@ def main() -> None:
     final_bandwidth: float | list[float] = (
         final_bandwidths[0] if len(final_bandwidths) == 1 else list(final_bandwidths)
     )
-    drift_class = DescriptorDrift if use_descriptors else DirectCoordinateDrift
+    drift_class = DescriptorDrift if use_descriptors else Drifting
     if system.name == "aldp" and use_descriptors:
         drift_class = AlanineDrift
     drift = drift_class(
