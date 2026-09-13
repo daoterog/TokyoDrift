@@ -21,7 +21,7 @@ dipeptide are retained as additional datasets.
 │   ├── prepare.py             # particle dataset downloader/preparation
 │   └── systems.py             # benchmark definitions and potentials
 ├── models/                    # generator architectures
-├── utils/                     # descriptors, KDE, drift diagnostics, I/O, runtime checks
+├── utils/                     # descriptors, KDE, drift diagnostics, and I/O helpers
 ├── jobs/                      # setup, download, and Slurm jobs
 ├── tests/                     # unit tests
 └── unsure/                    # staging area for files needing later classification

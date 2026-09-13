@@ -47,4 +47,3 @@ fi
 
 cd "$REPOSITORY_ROOT"
 "$UV" sync --locked "${SYNC_GROUPS[@]}"
-"$UV" run --no-sync python -m utils.verify_runtime --device auto

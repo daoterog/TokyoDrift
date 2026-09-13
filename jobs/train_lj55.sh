@@ -62,8 +62,6 @@ echo "final_checkpoint=$FINAL_CHECKPOINT"
 echo "parameters=$PARAMETERS"
 echo "evaluation_output=$RUN_DIRECTORY"
 
-"$UV" run --no-sync python -m utils.verify_runtime --device cuda
-
 # Forward training switches such as --normalized and --seed, preserving job paths.
 "$UV" run --no-sync python -m train \
     --config "$CONFIG" \

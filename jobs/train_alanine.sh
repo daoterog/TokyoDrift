@@ -55,7 +55,6 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 exec > >(tee "$RUN_DIRECTORY/train_and_evaluate.log") 2>&1
 echo "run_id=$RUN_ID config=$CONFIG parameters=$PARAMETERS"
-"$UV" run --no-sync python -m utils.verify_runtime --device cuda
 "$UV" run --no-sync python -m train --config "$CONFIG" "$@" \
     --device cuda --output "$CHECKPOINT_DIRECTORY"
 
