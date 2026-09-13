@@ -229,3 +229,5 @@ data/**/*.partial
 data/**/*.prmtop
 *.out
 .DS_Store
+
+*.pt
