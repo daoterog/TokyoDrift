@@ -1,179 +1,40 @@
 [project]
-name = "Equi"
+name = "particle-drift-benchmarks"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
-# torch and the compiled PyG wheels live in the `cuda` / `cpu` dependency groups
-# below, not here, because they are the only packages whose *build* has to match
-# the machine. Everything in this list is build-independent.
 dependencies = [
-    "black>=26.3.1",
-    "tqdm>=4.67.3",
-    "wandb>=0.26.0",
-    "isort>=8.0.1",
-    "numpy>=2.4.4",
-    "torch-geometric>=2.7.0",
-    "lightning>=2.6.1",
-    "einops>=0.8.2",
-    "gdown>=6.0.0",
-    "matplotlib>=3.10.9",
-    "rdkit>=2026.3.1",
-    "pillow>=12.2.0",
-    "ipykernel>=7.2.0",
-    "torch-linear-assignment>=0.0.6",
-    "ninja>=1.13.0",
-    "setuptools>=82.0.1",
-    "wheel>=0.47.0",
+    "matplotlib>=3.10,<4",
+    "numpy>=2.1,<3",
 ]
-
-# ---------------------------------------------------------------------------
-# Torch build selection.
-#
-# `cuda` and `cpu` hold the same packages at the same versions; only the wheel
-# index differs. They are declared as conflicting groups, so uv locks both
-# resolutions in uv.lock and one is chosen at install time:
-#
-#   uv sync                             CUDA (cu128), Linux/Windows with a GPU
-#   uv sync --no-group cuda --group cpu everything else, macOS included
-#
-# There is no way to make that choice inside pyproject.toml: a lockfile is
-# hardware-agnostic and environment markers cannot see whether a GPU exists.
-# The selection is done by the caller. macOS must use the `cpu` group: the cu128
-# index has no macOS wheels, so `uv sync` with the default cuda group fails there.
-#
-# In the `cpu` group torch has no index and installs from PyPI as-is, which is
-# already the CPU/MPS build on macOS. The compiled PyG packages still come from
-# the pyg-cpu flat index, the only place their macOS arm64 wheels are published.
-#
-# torch is pinned because the compiled PyG packages ship as prebuilt wheels
-# built against one exact torch version. Do not bump torch without checking
-# https://data.pyg.org/whl/ for a matching index, and update both flat indexes
-# below when you do.
-# ---------------------------------------------------------------------------
 
 [dependency-groups]
-cuda = [
-    "torch==2.9.0",
-    "pyg-lib",
-    "torch-scatter",
-    "torch-sparse",
-    "torch-cluster",
-    "torch-spline-conv",
-]
-cpu = [
-    "torch==2.9.0",
-    # pyg-lib does not publish macOS wheels for the torch 2.9 CPU index.
-    # It is an optional PyG accelerator; keep it on supported CPU platforms.
-    "pyg-lib; sys_platform != 'darwin'",
-    "torch-scatter",
-    "torch-sparse",
-    "torch-cluster",
-    "torch-spline-conv",
-]
+cpu = ["torch==2.9.0"]
+cuda = ["torch==2.9.0"]
+dev = ["ruff>=0.12,<1"]
+alanine = ["h5py>=3.12,<4", "openmm>=8.2,<9"]
 
 [tool.uv]
-default-groups = ["cuda"]
-conflicts = [[{ group = "cuda" }, { group = "cpu" }]]
-# Declare the platforms we actually have to support, so uv resolves to builds
-# that have wheels for them instead of picking a platform-specific local-version
-# build off the torch indexes. macOS is deliberately not listed: adding it would
-# force uv to resolve the cuda group there too, and cu128 has no macOS wheels.
-required-environments = [
-    "sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
-# torch-linear-assignment has no wheels and compiles a torch C++/CUDA extension.
-# Its build-system requires are ["setuptools", "torch>=1.12.0"] -- torch is
-# unpinned, so an isolated build pulls the latest PyPI torch (CUDA 13.0) and the
-# extension then fails against a 12.8 toolchain. Building without isolation makes
-# it compile against the torch actually installed here (2.9.0+cu128), and lets it
-# see ninja and numpy, which is why those are in the dependency list.
-no-build-isolation-package = ["torch-linear-assignment"]
+package = false
+default-groups = ["cpu", "dev"]
+conflicts = [[{ group = "cpu" }, { group = "cuda" }]]
 
-# Do not let uv try to build these from source if a wheel is missing: the source
-# builds need a full toolchain and take a very long time.
-no-build-package = [
-    "pyg-lib",
-    "torch-scatter",
-    "torch-sparse",
-    "torch-cluster",
-    "torch-spline-conv",
-]
-
-# Torch wheels. Only the CUDA index is declared; the cpu group takes torch from
-# PyPI (see the note above).
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
-# PyG binaries: prebuilt only, one flat index per torch build. The cpu page
-# carries macOS universal2 wheels for the four torch-* packages. pyg-lib has no
-# macOS wheel there and is therefore excluded from the cpu group on macOS.
-[[tool.uv.index]]
-name = "pyg-cu128"
-url = "https://data.pyg.org/whl/torch-2.9.0+cu128.html"
-format = "flat"
-explicit = true
-
-[[tool.uv.index]]
-name = "pyg-cpu"
-url = "https://data.pyg.org/whl/torch-2.9.0+cpu.html"
-format = "flat"
-explicit = true
-
 [tool.uv.sources]
 torch = { index = "pytorch-cu128", group = "cuda" }
-pyg-lib = [
-    { index = "pyg-cu128", group = "cuda" },
-    { index = "pyg-cpu", group = "cpu" },
-]
-torch-scatter = [
-    { index = "pyg-cu128", group = "cuda" },
-    { index = "pyg-cpu", group = "cpu" },
-]
-torch-sparse = [
-    { index = "pyg-cu128", group = "cuda" },
-    { index = "pyg-cpu", group = "cpu" },
-]
-torch-cluster = [
-    { index = "pyg-cu128", group = "cuda" },
-    { index = "pyg-cpu", group = "cpu" },
-]
-torch-spline-conv = [
-    { index = "pyg-cu128", group = "cuda" },
-    { index = "pyg-cpu", group = "cpu" },
-]
-
-# ---------------------------------------------------------------------------
-# Ruff: linter and formatter.
-# Run locally:  uv run ruff check .   and   uv run ruff format .
-# ---------------------------------------------------------------------------
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = []
 
 [tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes: undefined names, unused imports and variables
-    "I",   # isort: import ordering
-    "D",   # pydocstyle: docstrings, Google convention (see below)
-    "ANN", # flake8-annotations: type hints on parameters and returns
-    "B",   # bugbear: likely bugs (mutable default args, etc.)
-    "UP",  # pyupgrade: modern syntax for the target Python version
-    "SIM", # simplify: needlessly complex constructs
-    "N",   # pep8-naming
-    "RUF", # ruff-specific rules (unused noqa, etc.)
-]
+select = ["E", "W", "F", "I", "D", "ANN", "B", "UP", "SIM", "N", "RUF"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# Test files: docstrings and annotations are optional there.
-# N806: N, C, D, X etc. are standard maths notation here; renaming them to
-#       snake_case would make the tests harder to read.
-"**/tests/*" = ["D1", "ANN", "N806", "B023"]
+"tests/*" = ["D1", "ANN", "N806", "B023"]

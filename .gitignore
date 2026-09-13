@@ -218,12 +218,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Project outputs and downloaded datasets. Source code and JSON configurations
+# under data/ and models/ remain tracked.
 artifacts/
-
-data/
-
-models/
-
 results/
-
+data/**/downloads/
+data/**/*.h5
+data/**/*.npy
+data/**/*.npz
+data/**/*.partial
+data/**/*.prmtop
 *.out
+.DS_Store
