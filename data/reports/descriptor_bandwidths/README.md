@@ -1,13 +1,17 @@
 # Gaussian descriptor bandwidth audit
 
-Measured on the local DW4, LJ13 and LJ55 training splits, with seed 42 and the model/noise
-settings in each baseline training config under `configs/`. Each report uses 512 reference configurations,
-512 disjoint real query configurations, and 512 samples from the actual initialized generator.
-The descriptor is `sort({||x_i-x_j|| : i<j}) / sqrt(N*(N-1)/2)`. No test data are used.
-JSON reports include the model and noise settings, distance quantiles, nearest-reference
-distances, per-query kernel mass, effective reference counts, and coordinate field magnitudes.
-Field RMS uses the first 128 generated queries and all 512 references/negatives, excluding each
-query's self interaction. Timings and GPU throughput were not benchmarked.
+These files are historical diagnostic snapshots measured on local DW4, LJ13 and LJ55 training
+splits with seed 42. Their model and noise settings are embedded in each JSON report and do not
+match every current baseline config under `configs/`. The reports predate the explicit
+`model.architecture` field and used the historical EGNN generator.
+
+Each main report uses 512 reference configurations, 512 disjoint real query configurations, and
+512 samples from the initialized generator. The descriptor is
+`sort({||x_i-x_j|| : i<j}) / sqrt(N*(N-1)/2)`. No test data are used. JSON reports include the
+model and noise settings, distance quantiles, nearest-reference distances, per-query kernel mass,
+effective reference counts, and coordinate field magnitudes. Field RMS uses the first 128
+generated queries and all 512 references/negatives, excluding each query's self interaction.
+Timings and GPU throughput were not benchmarked.
 
 ## Selection rule
 
@@ -19,7 +23,7 @@ KDE bandwidth estimator. A local component at twice the median nearest-reference
 also included if it is smaller than half the global median. This matters for DW4: its median
 nearest-reference distance is only 0.074 despite its global median of 0.917.
 
-The configured lists round these candidate values:
+The bandwidth lists recommended when these snapshots were recorded round the candidate values:
 
 | System | Real distances: 5% / 50% / 95% | Initial distances: 5% / 50% / 95% | Bandwidth list |
 | --- | --- | --- | --- |
@@ -46,12 +50,11 @@ The configured lists round these candidate values:
 
 The reports establish distance scales and initial coverage for these data/model settings.
 They do not show convergence, improved energy distributions, or optimal bandwidths. Reference
-bank size affects nearest-neighbor distances and coverage; especially LJ55's configured bank
-of 64 is smaller than the main 512-reference diagnostic. The additional `lj55_bank64.json`
-report checks this actual bank size: real-data median distance is 0.0503 and initial
+bank size affects nearest-neighbor distances and coverage. The additional `lj55_bank64.json`
+report checks a smaller 64-reference bank: real-data median distance is 0.0503 and initial
 generator-to-data median distance is 0.2013, supporting the same approximate bandwidth range.
-Reproduce it with `--samples 64`. The median/global distance scale is less sensitive to bank
-size than local coverage.
+Reproduce that snapshot size with `--samples 64`. The median/global distance scale is less
+sensitive to bank size than local coverage.
 Different seeds and a trained generator can also change coverage substantially.
 
 Keep both fine and broad components initially. Select any later bandwidth annealing and `eta`
@@ -61,5 +64,7 @@ so retaining the old `eta` is a starting experiment, not an assertion that it is
 Check structural observables too: a sorted pair-distance distribution loses connectivity and is
 not a unique encoding of every configuration, even though it retains the pairwise energy.
 
-Run `python -m utils.check_bandwidths --config <config> --output <report.json>`
-from the repository root in the particle-system environment to regenerate a report.
+Run
+`uv run --no-sync python -m utils.check_bandwidths --config <config> --output <report.json>`
+from the repository root to audit a current configuration. Results are directly comparable to a
+recorded snapshot only when its embedded model, noise, sample count, and seed settings match.

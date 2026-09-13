@@ -1,6 +1,6 @@
 # Data
 
-Each benchmark owns its configuration and local dataset directory:
+Training configurations live in `../configs/`. Each benchmark has a local dataset directory here:
 
 - `dw4/` and `lj13/` are the primary benchmarks.
 - `lj55/` is retained as the larger Lennard-Jones benchmark.

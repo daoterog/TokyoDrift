@@ -24,8 +24,7 @@ benchmarks; LJ55 and fixed-topology alanine dipeptide are retained as additional
 ├── models/                    # generator architectures
 ├── utils/                     # descriptors, KDE, drift diagnostics, and I/O helpers
 ├── jobs/                      # setup, download, and Slurm jobs
-├── tests/                     # unit tests
-└── unsure/                    # staging area for files needing later classification
+└── tests/                     # unit tests
 ```
 
 Generated checkpoints belong under `results/<dataset>/<run-id>/checkpoints/`, not `models/`;
@@ -47,10 +46,17 @@ For Linux or Windows with an NVIDIA GPU, use the CUDA group:
 uv sync --no-group cpu --group cuda
 ```
 
-Alanine preparation and energy evaluation additionally require:
+Alanine preparation and energy evaluation additionally require the `alanine` dependency group.
+For a CPU environment, use:
 
 ```bash
 uv sync --group alanine
+```
+
+For a CUDA environment, preserve the CUDA selection while adding alanine dependencies:
+
+```bash
+uv sync --no-group cpu --group cuda --group alanine
 ```
 
 Platform helpers and compute-node jobs live in `jobs/`.
@@ -80,12 +86,16 @@ development and comparison targets.
 ## Train
 
 ```bash
-uv run --no-sync python -m train --config configs/dw4_config.json
-uv run --no-sync python -m train --config configs/lj13_config.json
+uv run --no-sync python -m train --config configs/dw4_config.json \
+  --output results/dw4/example-run/checkpoints
+uv run --no-sync python -m train --config configs/lj13_config.json \
+  --output results/lj13/example-run/checkpoints
 ```
 
-Every run must use its own output directory. Set `model.architecture` to `"egnn"` for an
-E(n)-equivariant generator or `"gnn"` for an unconstrained graph neural network. Configurations
+Replace `example-run` with a unique run identifier. The checked-in configs contain baseline output
+paths, so pass `--output` when running multiple experiments to avoid reusing an existing directory.
+Set `model.architecture` to `"egnn"` for an E(n)-equivariant generator or `"gnn"` for a graph
+neural network whose coordinate updates are not constrained to be E(n)-equivariant. Configurations
 also support scalar, `"auto"`, or multi-scale bandwidths; Gaussian or Laplacian kernels; optional
 invariant sorted-pair-distance descriptors; and optional local kernel-mass normalization.
 
