@@ -1,0 +1,309 @@
+{
+  "system": "dw4",
+  "seed": 42,
+  "model_seed": 42,
+  "model": {
+    "feature_dim": 8,
+    "hidden_dim": 64,
+    "layers": 4,
+    "radial_basis": 16,
+    "max_distance": 8.0
+  },
+  "coordinate_noise_scale": 2.5,
+  "samples_per_bank": 512,
+  "descriptor": "sorted_pair_distances / sqrt(number_of_pairs)",
+  "kernel": "gaussian",
+  "data_descriptor_distances": {
+    "q05": 0.15383881330490112,
+    "q50": 0.9173327684402466,
+    "q95": 1.6037836074829102
+  },
+  "initial_generator_descriptor_distances": {
+    "q05": 0.6170313954353333,
+    "q50": 1.3906915187835693,
+    "q95": 3.2905616760253906
+  },
+  "data_nearest_reference_distance": {
+    "q05": 0.03064616210758686,
+    "q50": 0.07402553409337997,
+    "q95": 0.16977615654468536
+  },
+  "initial_generator_nearest_reference_distance": {
+    "q05": 0.23201750218868256,
+    "q50": 0.7801957130432129,
+    "q95": 2.4586079120635986
+  },
+  "suggested_multiscale_bandwidths": [
+    0.14769,
+    0.458665,
+    0.91733,
+    1.834659
+  ],
+  "candidates": [
+    {
+      "bandwidth": 0.14769,
+      "data": {
+        "mean_kernel_mass": 0.1111639067530632,
+        "kernel_mass": {
+          "q05": 0.008692263625562191,
+          "q50": 0.12255833297967911,
+          "q95": 0.1895958036184311
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 147.9046630859375
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.0009888284839689732,
+        "kernel_mass": {
+          "q05": 0.0,
+          "q50": 4.490469773799077e-09,
+          "q95": 0.003261751728132367
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.50390625,
+        "effective_references_median": 3.128108263015747
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.009024083614349365,
+        "positive_field_rms": 0.00881983246654272,
+        "negative_field_rms": 0.0020365845412015915,
+        "temperature_field_rms_mean": 0.009024083614349365,
+        "temperature_field_rms_min": 0.009024083614349365,
+        "temperature_field_rms_max": 0.009024083614349365,
+        "positive_kernel_mass": 0.0009128054371103644,
+        "negative_kernel_mass": 0.0012536655412986875
+      }
+    },
+    {
+      "bandwidth": 0.15,
+      "data": {
+        "mean_kernel_mass": 0.11443724483251572,
+        "kernel_mass": {
+          "q05": 0.009127726778388023,
+          "q50": 0.12644638121128082,
+          "q95": 0.1936231553554535
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 150.24053955078125
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.001063455594703555,
+        "kernel_mass": {
+          "q05": 0.0,
+          "q50": 7.098155840878917e-09,
+          "q95": 0.003537073964253068
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.490234375,
+        "effective_references_median": 3.2940919399261475
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.00946402084082365,
+        "positive_field_rms": 0.009253768250346184,
+        "negative_field_rms": 0.002115342766046524,
+        "temperature_field_rms_mean": 0.00946402084082365,
+        "temperature_field_rms_min": 0.00946402084082365,
+        "temperature_field_rms_max": 0.00946402084082365,
+        "positive_kernel_mass": 0.0009883932070806623,
+        "negative_kernel_mass": 0.0013390061212703586
+      }
+    },
+    {
+      "bandwidth": 0.45,
+      "data": {
+        "mean_kernel_mass": 0.3759061396121979,
+        "kernel_mass": {
+          "q05": 0.19956937432289124,
+          "q50": 0.401988685131073,
+          "q95": 0.4311428964138031
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 255.32754516601562
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.07535731792449951,
+        "kernel_mass": {
+          "q05": 1.080858158530873e-08,
+          "q50": 0.034670762717723846,
+          "q95": 0.2733609676361084
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.064453125,
+        "effective_references_median": 227.06854248046875
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.05294422060251236,
+        "positive_field_rms": 0.05861491337418556,
+        "negative_field_rms": 0.02514212764799595,
+        "temperature_field_rms_mean": 0.05294422060251236,
+        "temperature_field_rms_min": 0.05294422060251236,
+        "temperature_field_rms_max": 0.05294422060251236,
+        "positive_kernel_mass": 0.07205898314714432,
+        "negative_kernel_mass": 0.06311210244894028
+      }
+    },
+    {
+      "bandwidth": 0.458665,
+      "data": {
+        "mean_kernel_mass": 0.380790114402771,
+        "kernel_mass": {
+          "q05": 0.21040019392967224,
+          "q50": 0.4060332179069519,
+          "q95": 0.4353838562965393
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 257.52490234375
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.07951163500547409,
+        "kernel_mass": {
+          "q05": 2.0336592854164337e-08,
+          "q50": 0.038441192358732224,
+          "q95": 0.28265440464019775
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.056640625,
+        "effective_references_median": 233.15496826171875
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.05321698263287544,
+        "positive_field_rms": 0.05940115824341774,
+        "negative_field_rms": 0.025822270661592484,
+        "temperature_field_rms_mean": 0.05321698263287544,
+        "temperature_field_rms_min": 0.05321698263287544,
+        "temperature_field_rms_max": 0.05321698263287544,
+        "positive_kernel_mass": 0.07584639638662338,
+        "negative_kernel_mass": 0.06633682548999786
+      }
+    },
+    {
+      "bandwidth": 0.9,
+      "data": {
+        "mean_kernel_mass": 0.6228718757629395,
+        "kernel_mass": {
+          "q05": 0.5140724182128906,
+          "q50": 0.6363801956176758,
+          "q95": 0.6857244372367859
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 413.64202880859375
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.32929712533950806,
+        "kernel_mass": {
+          "q05": 0.005796628072857857,
+          "q50": 0.3482699692249298,
+          "q95": 0.64713054895401
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 420.7864685058594
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.053391944617033005,
+        "positive_field_rms": 0.08256800472736359,
+        "negative_field_rms": 0.04498178884387016,
+        "temperature_field_rms_mean": 0.053391944617033005,
+        "temperature_field_rms_min": 0.053391944617033005,
+        "temperature_field_rms_max": 0.053391944617033005,
+        "positive_kernel_mass": 0.30834507942199707,
+        "negative_kernel_mass": 0.2654055953025818
+      }
+    },
+    {
+      "bandwidth": 0.91733,
+      "data": {
+        "mean_kernel_mass": 0.6310139298439026,
+        "kernel_mass": {
+          "q05": 0.5238498449325562,
+          "q50": 0.6443791389465332,
+          "q95": 0.6938230395317078
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 418.5588073730469
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.33864080905914307,
+        "kernel_mass": {
+          "q05": 0.006875269114971161,
+          "q50": 0.3607824444770813,
+          "q95": 0.6564105153083801
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 425.3240051269531
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.053060222417116165,
+        "positive_field_rms": 0.08268608152866364,
+        "negative_field_rms": 0.04526674374938011,
+        "temperature_field_rms_mean": 0.053060222417116165,
+        "temperature_field_rms_min": 0.053060222417116165,
+        "temperature_field_rms_max": 0.053060222417116165,
+        "positive_kernel_mass": 0.31732773780822754,
+        "negative_kernel_mass": 0.2733653485774994
+      }
+    },
+    {
+      "bandwidth": 1.8,
+      "data": {
+        "mean_kernel_mass": 0.8639732599258423,
+        "kernel_mass": {
+          "q05": 0.8117465376853943,
+          "q50": 0.8698121309280396,
+          "q95": 0.9005947113037109
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 502.5685119628906
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.6700662970542908,
+        "kernel_mass": {
+          "q05": 0.22854970395565033,
+          "q50": 0.7504046559333801,
+          "q95": 0.8892570734024048
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 503.00006103515625
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.03045516088604927,
+        "positive_field_rms": 0.06306419521570206,
+        "negative_field_rms": 0.04347385838627815,
+        "temperature_field_rms_mean": 0.03045516088604927,
+        "temperature_field_rms_min": 0.03045516088604927,
+        "temperature_field_rms_max": 0.03045516088604927,
+        "positive_kernel_mass": 0.6488519310951233,
+        "negative_kernel_mass": 0.5912486910820007
+      }
+    },
+    {
+      "bandwidth": 1.834659,
+      "data": {
+        "mean_kernel_mass": 0.8683876991271973,
+        "kernel_mass": {
+          "q05": 0.8176614046096802,
+          "q50": 0.8740572929382324,
+          "q95": 0.9040222764015198
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 503.2328186035156
+      },
+      "initial_generator": {
+        "mean_kernel_mass": 0.6783239841461182,
+        "kernel_mass": {
+          "q05": 0.24086089432239532,
+          "q50": 0.7582669854164124,
+          "q95": 0.8930949568748474
+        },
+        "fraction_queries_max_kernel_below_1e-6": 0.0,
+        "effective_references_median": 503.6346435546875
+      },
+      "coordinate_fields": {
+        "drift_rms": 0.029751533642411232,
+        "positive_field_rms": 0.06209481135010719,
+        "negative_field_rms": 0.04307616502046585,
+        "temperature_field_rms_mean": 0.029751533642411232,
+        "temperature_field_rms_min": 0.029751533642411232,
+        "temperature_field_rms_max": 0.029751533642411232,
+        "positive_kernel_mass": 0.6574081182479858,
+        "negative_kernel_mass": 0.6001550555229187
+      }
+    }
+  ],
+  "interpretation": "Coverage diagnostic, not a trained-model quality or convergence test."
+}
