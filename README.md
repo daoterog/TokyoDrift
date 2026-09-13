@@ -79,8 +79,8 @@ development and comparison targets.
 ## Train
 
 ```bash
-uv run --no-sync python -m train --config data/dw4/gaussian.json
-uv run --no-sync python -m train --config data/lj13/gaussian.json
+uv run --no-sync python -m train --config configs/dw4_config.json
+uv run --no-sync python -m train --config configs/lj13_config.json
 ```
 
 Every run must use its own output directory. Configurations support scalar, `"auto"`, or
@@ -97,7 +97,7 @@ Run a diagnostic with:
 
 ```bash
 uv run --no-sync python -m utils.check_bandwidths \
-  --config data/lj13/gaussian.json \
+  --config configs/lj13_config.json \
   --output /tmp/lj13-descriptor-bandwidths.json --samples 512 --seed 42
 ```
 

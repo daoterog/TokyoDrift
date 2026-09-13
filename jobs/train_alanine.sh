@@ -31,7 +31,7 @@ else
 fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
-CONFIG="$REPOSITORY_ROOT/data/alanine_dipeptide/gaussian.json"
+CONFIG="$REPOSITORY_ROOT/configs/alanine_dipeptide_config.json"
 RUN_DIRECTORY="$REPOSITORY_ROOT/results/alanine_dipeptide/$RUN_ID"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"

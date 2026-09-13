@@ -116,7 +116,7 @@ class NormalizedDriftTests(unittest.TestCase):
                 Drifting(1.0, normalized=value)
 
     def test_lj55_training_override_checkpoint_and_resume(self):
-        config_path = Path(__file__).resolve().parents[1] / "data/lj55/gaussian.json"
+        config_path = Path(__file__).resolve().parents[1] / "configs/lj55_config.json"
         config = json.loads(config_path.read_text())
         original_model = config["model"].copy()
         # Exercise the real LJ55 architecture with a tiny synthetic reference split.

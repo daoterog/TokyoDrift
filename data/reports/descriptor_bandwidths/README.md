@@ -1,7 +1,7 @@
 # Gaussian descriptor bandwidth audit
 
 Measured on the local DW4, LJ13 and LJ55 training splits, with seed 42 and the model/noise
-settings in each baseline `gaussian.json`. Each report uses 512 reference configurations,
+settings in each baseline training config under `configs/`. Each report uses 512 reference configurations,
 512 disjoint real query configurations, and 512 samples from the actual initialized generator.
 The descriptor is `sort({||x_i-x_j|| : i<j}) / sqrt(N*(N-1)/2)`. No test data are used.
 JSON reports include the model and noise settings, distance quantiles, nearest-reference

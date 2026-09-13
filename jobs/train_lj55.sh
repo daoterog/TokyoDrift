@@ -32,7 +32,7 @@ else
 fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
-CONFIG="$REPOSITORY_ROOT/data/lj55/gaussian.json"
+CONFIG="$REPOSITORY_ROOT/configs/lj55_config.json"
 RUN_DIRECTORY="$REPOSITORY_ROOT/results/lj55/$RUN_ID"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"

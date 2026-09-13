@@ -32,7 +32,7 @@ else
 fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
-CONFIG="$REPOSITORY_ROOT/data/dw4/gaussian_large.json"
+CONFIG="$REPOSITORY_ROOT/configs/dw4_config.json"
 RUN_DIRECTORY="$REPOSITORY_ROOT/results/dw4/$RUN_ID"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"
