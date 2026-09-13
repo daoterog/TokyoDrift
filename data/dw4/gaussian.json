@@ -7,7 +7,7 @@
     "descriptors": true
   },
   "data": "data/dw4/dataset.npz",
-  "output": "artifacts/runs/dw4/gaussian",
+  "output": "results/dw4/gaussian/checkpoints",
   "seed": 42,
   "model": {
     "feature_dim": 8,

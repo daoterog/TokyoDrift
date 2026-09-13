@@ -27,8 +27,9 @@ dipeptide are retained as additional datasets.
 └── unsure/                    # staging area for files needing later classification
 ```
 
-Generated checkpoints belong under `artifacts/checkpoints/`, not `models/`; `models/` contains
-source code only. Local arrays, downloads, artifacts, results, and job logs are ignored by Git.
+Generated checkpoints belong under `results/<dataset>/<run-id>/checkpoints/`, not `models/`;
+`models/` contains source code only. Local arrays, downloads, results, and job logs are ignored by
+Git.
 
 ## Setup
 
@@ -104,7 +105,7 @@ uv run --no-sync python -m utils.check_bandwidths \
 
 ```bash
 uv run --no-sync python -m evaluate \
-  --checkpoint artifacts/checkpoints/dw4/example.pt \
+  --checkpoint results/dw4/example/checkpoints/final.pt \
   --output results/dw4/example --num-samples 500000
 ```
 
@@ -117,8 +118,22 @@ Alanine uses labeled pair distances rather than sorted identical-particle descri
 with `python -m evaluate_alanine`; validation combines periodic backbone-angle agreement with
 geometry validity, and the full evaluation can add AMBER ff96/OBC1 energy metrics.
 
-The Slurm jobs in `jobs/` train and evaluate each retained benchmark. Their outputs go to
-`artifacts/checkpoints/<system>/` and `results/<system>/`.
+The Slurm jobs in `jobs/` keep each run self-contained under `results/<dataset>/<run-id>/`.
+Training writes into its `checkpoints/` child; evaluation writes metrics, arrays, plots, and the
+combined job log into the run directory.
+
+```text
+results/<dataset>/<run-id>/
+├── checkpoints/               # periodic, latest, selected, and final checkpoints
+├── metrics.json
+├── distributions.png          # particle benchmarks
+├── energy_all_samples.png     # particle benchmarks
+├── energy_valid_samples.png   # particle benchmarks
+├── ramachandran.png           # alanine
+├── free_energy.png            # alanine
+├── slurm.out                  # scheduler output when submitted with Slurm
+└── train_and_evaluate.log     # combined training and evaluation log
+```
 
 ## Test
 

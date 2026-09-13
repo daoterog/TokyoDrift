@@ -220,7 +220,6 @@ __marimo__/
 
 # Project outputs and downloaded datasets. Source code and JSON configurations
 # under data/ and models/ remain tracked.
-artifacts/
 results/
 data/**/downloads/
 data/**/*.h5

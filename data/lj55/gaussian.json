@@ -7,7 +7,7 @@
     "descriptors": true
   },
   "data": "data/lj55/dataset.npz",
-  "output": "artifacts/runs/lj55/gaussian",
+  "output": "results/lj55/gaussian/checkpoints",
   "seed": 42,
   "model": {
     "feature_dim": 8,

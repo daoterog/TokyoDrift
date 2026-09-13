@@ -33,27 +33,34 @@ fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
 CONFIG="$REPOSITORY_ROOT/data/lj55/gaussian.json"
-TRAIN_DIRECTORY="$REPOSITORY_ROOT/artifacts/checkpoints/lj55/runs/$RUN_ID"
-FINAL_CHECKPOINT="$REPOSITORY_ROOT/artifacts/checkpoints/lj55/gaussian-$RUN_ID.pt"
-PARAMETERS="$TRAIN_DIRECTORY/parameters.json"
-RESULT_DIRECTORY="$REPOSITORY_ROOT/results/lj55/$RUN_ID"
+RUN_DIRECTORY="$REPOSITORY_ROOT/results/lj55/$RUN_ID"
+CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
+FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"
+PARAMETERS="$CHECKPOINT_DIRECTORY/parameters.json"
 
-if [[ -e "$TRAIN_DIRECTORY" || -e "$FINAL_CHECKPOINT" || -e "$RESULT_DIRECTORY" ]]; then
-    echo "run $RUN_ID already has model or result output; choose a different RUN_ID" >&2
+if [[ -e "$RUN_DIRECTORY" ]]; then
+    echo "run $RUN_ID already exists; choose a different RUN_ID" >&2
     exit 1
 fi
-mkdir -p "$TRAIN_DIRECTORY" "$RESULT_DIRECTORY"
-exec > >(tee "$RESULT_DIRECTORY/train_and_evaluate.log") 2>&1
+mkdir -p "$CHECKPOINT_DIRECTORY"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    SLURM_OUTPUT="$REPOSITORY_ROOT/train-lj55-$SLURM_JOB_ID.out"
+    if [[ -e "$SLURM_OUTPUT" ]]; then
+        mv "$SLURM_OUTPUT" "$RUN_DIRECTORY/slurm.out"
+    fi
+fi
+exec > >(tee "$RUN_DIRECTORY/train_and_evaluate.log") 2>&1
 
 cd "$REPOSITORY_ROOT"
 export PYTHONUNBUFFERED=1
 
 echo "run_id=$RUN_ID"
 echo "training_config=$CONFIG"
-echo "training_output=$TRAIN_DIRECTORY"
+echo "run_output=$RUN_DIRECTORY"
+echo "checkpoint_output=$CHECKPOINT_DIRECTORY"
 echo "final_checkpoint=$FINAL_CHECKPOINT"
 echo "parameters=$PARAMETERS"
-echo "evaluation_output=$RESULT_DIRECTORY"
+echo "evaluation_output=$RUN_DIRECTORY"
 
 "$UV" run --no-sync python -m utils.verify_runtime --device cuda
 
@@ -62,20 +69,20 @@ echo "evaluation_output=$RESULT_DIRECTORY"
     --config "$CONFIG" \
     "$@" \
     --device cuda \
-    --output "$TRAIN_DIRECTORY"
+    --output "$CHECKPOINT_DIRECTORY"
 
 if [[ ! -s "$PARAMETERS" ]]; then
     echo "training completed without a parameter snapshot at $PARAMETERS" >&2
     exit 1
 fi
-cp "$TRAIN_DIRECTORY/latest.pt" "$FINAL_CHECKPOINT"
+cp "$CHECKPOINT_DIRECTORY/latest.pt" "$FINAL_CHECKPOINT"
 
 # LJ55 has 2,970 directed edges per configuration: bound GPU inference memory.
 "$UV" run --no-sync python -m evaluate \
     --checkpoint "$FINAL_CHECKPOINT" \
-    --output "$RESULT_DIRECTORY" \
+    --output "$RUN_DIRECTORY" \
     --device cuda \
     --batch-size 64 \
     --num-samples 500000
 
-echo "completed checkpoint=$FINAL_CHECKPOINT parameters=$PARAMETERS results=$RESULT_DIRECTORY"
+echo "completed checkpoint=$FINAL_CHECKPOINT parameters=$PARAMETERS results=$RUN_DIRECTORY"

@@ -30,5 +30,6 @@ fi
 
 cd "$REPOSITORY_ROOT"
 for SYSTEM in dw4 lj13 lj55; do
-    "$UV" run --no-sync python -m data.prepare "$SYSTEM"
+    "$UV" run --no-sync python -m data.prepare "$SYSTEM" \
+        --output "$REPOSITORY_ROOT/data/$SYSTEM/dataset.npz"
 done

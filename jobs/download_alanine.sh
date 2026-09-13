@@ -32,4 +32,5 @@ export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 # Prepare this shared environment before starting training jobs.
 "$UV" sync --locked --no-group cpu --group cuda --group alanine
-"$UV" run --no-sync python -m data.alanine_dipeptide.prepare "$@"
+"$UV" run --no-sync python -m data.alanine_dipeptide.prepare "$@" \
+    --output "$REPOSITORY_ROOT/data/alanine_dipeptide/dataset.npz"
