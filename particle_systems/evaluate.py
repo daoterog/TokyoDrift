@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import numpy as np
 import torch
 
 from .io import build_model, device_summary, load_dataset, select_device
+from .kde import descriptor_kde_nll, raw_distance_kde_report
 from .systems import center, get_system, pair_distances
 
 DEFAULT_METRIC_SAMPLE_SIZE = 1_000_000
@@ -47,6 +49,42 @@ def arguments() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Minimum pair separation defining a collision-free configuration.",
+    )
+    parser.add_argument(
+        "--kde-centers",
+        type=int,
+        default=10_000,
+        help="Generated and training-reference KDE centers for DW4/LJ13.",
+    )
+    parser.add_argument(
+        "--kde-queries",
+        type=int,
+        default=10_000,
+        help="Held-out test configurations scored by the DW4/LJ13 KDE.",
+    )
+    parser.add_argument(
+        "--kde-tuning-queries",
+        type=int,
+        default=2_000,
+        help="Disjoint generated/reference configurations used to tune each KDE bandwidth.",
+    )
+    parser.add_argument(
+        "--kde-batch-size",
+        type=int,
+        default=256,
+        help="Query chunk size for KDE distance calculations.",
+    )
+    parser.add_argument(
+        "--kde-bandwidths",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional positive bandwidth candidates; otherwise derive a grid per KDE.",
+    )
+    parser.add_argument(
+        "--skip-kde-nll",
+        action="store_true",
+        help="Skip the sample-based descriptor KDE NLL estimate.",
     )
     return parser.parse_args()
 
@@ -614,6 +652,16 @@ def main() -> None:
     args = arguments()
     if args.metric_sample_size <= 0:
         raise ValueError("metric sample size must be positive")
+    if (
+        min(
+            args.kde_centers,
+            args.kde_queries,
+            args.kde_tuning_queries,
+            args.kde_batch_size,
+        )
+        <= 0
+    ):
+        raise ValueError("KDE sample counts and batch size must be positive")
     torch.manual_seed(args.seed)
     device = select_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -621,7 +669,8 @@ def main() -> None:
     system = get_system(config["system"])
     if system.name == "aldp":
         raise ValueError("use python -m particle_systems.evaluate_alanine for molecular metrics")
-    reference, metadata = load_dataset(Path(config["data"]), "test")
+    data_path = Path(config["data"])
+    reference, metadata = load_dataset(data_path, "test")
     if metadata["system"] != system.name:
         raise ValueError("checkpoint and test dataset systems differ")
     model = build_model(config).to(device).eval()
@@ -637,6 +686,45 @@ def main() -> None:
         int(config["model"]["feature_dim"]),
         device,
     )
+    if system.name in {"dw4", "lj13"} and not args.skip_kde_nll:
+        training_reference, training_metadata = load_dataset(data_path, "train")
+        if training_metadata["system"] != system.name:
+            raise ValueError("checkpoint and KDE training dataset systems differ")
+        center_count = min(
+            args.kde_centers,
+            len(generated) - 1,
+            len(training_reference) - 1,
+        )
+        tuning_count = min(
+            args.kde_tuning_queries,
+            len(generated) - center_count,
+            len(training_reference) - center_count,
+        )
+        query_count = min(args.kde_queries, len(reference))
+        if min(center_count, tuning_count, query_count) <= 0:
+            raise ValueError("insufficient configurations for disjoint KDE estimation")
+        kde_metrics = descriptor_kde_nll(
+            generated,
+            training_reference,
+            reference,
+            center_count=center_count,
+            tuning_query_count=tuning_count,
+            test_query_count=query_count,
+            query_batch_size=args.kde_batch_size,
+            bandwidth_candidates=args.kde_bandwidths,
+            device=device,
+        )
+        raw_distance_kde_metrics = raw_distance_kde_report(kde_metrics)
+    else:
+        kde_metrics = {
+            "available": False,
+            "reason": (
+                "disabled by --skip-kde-nll"
+                if args.skip_kde_nll
+                else "descriptor KDE NLL is enabled only for DW4 and LJ13"
+            ),
+        }
+        raw_distance_kde_metrics = deepcopy(kde_metrics)
     metrics = {
         "system": system.name,
         "checkpoint": str(args.checkpoint),
@@ -679,6 +767,8 @@ def main() -> None:
             args.min_pair_distance,
             metric_sample_size=args.metric_sample_size,
         ),
+        "descriptor_kde_nll": kde_metrics,
+        "raw_distance_kde_nll": raw_distance_kde_metrics,
         "endpoint_transport_distance_per_particle": endpoint_distance,
         "paper_metrics": {
             "reference_results": system.paper_reference,

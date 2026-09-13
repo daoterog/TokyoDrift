@@ -264,6 +264,20 @@ with a full-range symmetric-log CDF, and `energy_valid_samples.png`, conditionin
 on the declared collision and energy criteria. The raw energies and validity masks are retained in
 `energy_distributions.npz`, allowing those figures to be revised without sampling the model again.
 
+For DW4 and LJ13, evaluation additionally reports `descriptor_kde_nll`. It fits a normalized
+Gaussian KDE to generated sorted-pair-distance descriptors and scores deterministic held-out test
+configurations. Bandwidths are selected without test leakage on disjoint center and tuning splits
+from each distribution. The Gaussian normalization uses the intrinsic configuration dimension
+after translations and rotations, rather than the redundant number of pair distances. A
+training-reference KDE scores the same test queries as a baseline; the most useful result is the
+generated-minus-reference excess NLL. This is a smoothed, symmetry-invariant
+descriptor-manifold estimate, not the exact coordinate-space NLL reported for invertible flows.
+Control its cost with `--kde-centers`, `--kde-queries`, `--kde-tuning-queries`, and
+`--kde-batch-size`, or disable it with `--skip-kde-nll`. The equivalent KDE in unscaled pair-
+distance units is included as `raw_distance_kde_nll`. Since raw distances differ by the global
+factor `sqrt(number of pairs)`, its bandwidths and absolute NLL include the exact change-of-units
+adjustment while its generated-minus-reference excess NLL is unchanged.
+
 ## GMM-40 benchmark
 
 ```bash
