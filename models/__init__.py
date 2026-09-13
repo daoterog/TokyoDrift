@@ -1,5 +1,6 @@
 """Generator architectures."""
 
-from .particle_generator import EGNNLayer, ParticleGenerator
+from .egnn import EGNN, EGNNLayer
+from .gnn import GNN, GNNLayer
 
-__all__ = ["EGNNLayer", "ParticleGenerator"]
+__all__ = ["EGNN", "GNN", "EGNNLayer", "GNNLayer"]

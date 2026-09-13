@@ -9,6 +9,7 @@
   "output": "results/dw4/gaussian-large/checkpoints",
   "seed": 42,
   "model": {
+    "architecture": "egnn",
     "feature_dim": 8,
     "hidden_dim": 128,
     "layers": 6,

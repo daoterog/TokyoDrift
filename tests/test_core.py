@@ -20,7 +20,7 @@ from evaluate import (
     validity_metrics,
     wasserstein_1,
 )
-from models.particle_generator import ParticleGenerator
+from models import EGNN, GNN
 from train import (
     EnergyStratifiedReferenceSampler,
     bandwidth_scale,
@@ -28,6 +28,7 @@ from train import (
     learning_rate,
     resolve_ema_decay,
 )
+from utils.io import build_model
 
 
 class PotentialTests(unittest.TestCase):
@@ -349,9 +350,9 @@ class BandwidthScheduleTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
-    def test_permutation_and_rotation_equivariance(self) -> None:
+    def test_egnn_is_permutation_and_rotation_equivariant(self) -> None:
         torch.manual_seed(4)
-        model = ParticleGenerator(feature_dim=3, hidden_dim=16, layers=2, radial_basis=6)
+        model = EGNN(feature_dim=3, hidden_dim=16, layers=2, radial_basis=6)
         positions = center(torch.randn(2, 4, 2))
         features = torch.randn(2, 4, 3)
         permutation = torch.tensor([2, 0, 3, 1])
@@ -359,6 +360,51 @@ class ModelTests(unittest.TestCase):
         expected = model(positions, features)[:, permutation] @ rotation.T
         actual = model(positions[:, permutation] @ rotation.T, features[:, permutation])
         self.assertTrue(torch.allclose(actual, expected, atol=2e-5, rtol=2e-5))
+
+    def test_gnn_is_permutation_equivariant_but_not_rotation_equivariant(self) -> None:
+        torch.manual_seed(4)
+        model = GNN(
+            dimensions=2,
+            feature_dim=3,
+            hidden_dim=16,
+            layers=2,
+            radial_basis=6,
+        )
+        positions = center(torch.randn(2, 4, 2))
+        features = torch.randn(2, 4, 3)
+        permutation = torch.tensor([2, 0, 3, 1])
+        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        expected = model(positions, features)
+        permuted = model(positions[:, permutation], features[:, permutation])
+        torch.testing.assert_close(permuted, expected[:, permutation])
+        rotated = model(positions @ rotation.T, features)
+        equivariant_result = expected @ rotation.T
+        self.assertGreater(float((rotated - equivariant_result).abs().max().detach()), 1e-6)
+        torch.testing.assert_close(rotated.mean(dim=1), torch.zeros(2, 2), atol=1e-6, rtol=0)
+
+    def test_model_architecture_selector(self) -> None:
+        definition = {
+            "feature_dim": 3,
+            "hidden_dim": 8,
+            "layers": 1,
+            "radial_basis": 4,
+            "max_distance": 8,
+        }
+        for architecture, expected_type in (("egnn", EGNN), ("gnn", GNN)):
+            with self.subTest(architecture=architecture):
+                config = {
+                    "system": "dw4",
+                    "model": {**definition, "architecture": architecture},
+                }
+                self.assertIsInstance(build_model(config), expected_type)
+        self.assertIsInstance(build_model({"system": "dw4", "model": definition}), EGNN)
+        with self.assertRaisesRegex(ValueError, "model.architecture"):
+            build_model(
+                {
+                    "system": "dw4",
+                    "model": {**definition, "architecture": "transformer"},
+                }
+            )
 
 
 if __name__ == "__main__":

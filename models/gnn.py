@@ -1,4 +1,4 @@
-"""E(n)-equivariant direct generator for fixed-size particle systems."""
+"""Non-geometric complete-graph generator for fixed-size particle systems."""
 
 from __future__ import annotations
 
@@ -16,15 +16,26 @@ def _mlp(input_dim: int, hidden_dim: int, output_dim: int) -> nn.Sequential:
     )
 
 
-class EGNNLayer(nn.Module):
-    """Small complete-graph E(n)-equivariant message-passing layer."""
+class GNNLayer(nn.Module):
+    """Complete-graph message-passing layer without geometric equivariance."""
 
-    def __init__(self, hidden_dim: int, radial_basis: int = 16, max_distance: float = 8.0) -> None:
-        """Initialize one message-passing and coordinate-update layer."""
+    def __init__(
+        self,
+        hidden_dim: int,
+        dimensions: int,
+        radial_basis: int = 16,
+        max_distance: float = 8.0,
+    ) -> None:
+        """Initialize one feature and unconstrained coordinate-update layer."""
         super().__init__()
-        self.edge_mlp = _mlp(2 * hidden_dim + radial_basis, hidden_dim, hidden_dim)
+        self.dimensions = dimensions
+        self.edge_mlp = _mlp(
+            2 * hidden_dim + 2 * dimensions + radial_basis,
+            hidden_dim,
+            hidden_dim,
+        )
         self.edge_gate = nn.Linear(hidden_dim, 1)
-        self.coordinate_mlp = _mlp(hidden_dim, hidden_dim, 1)
+        self.coordinate_mlp = _mlp(hidden_dim, hidden_dim, dimensions)
         self.node_mlp = _mlp(2 * hidden_dim, 2 * hidden_dim, hidden_dim)
         self.norm = nn.LayerNorm(hidden_dim)
         centers = torch.linspace(0.0, max_distance, radial_basis)
@@ -37,31 +48,43 @@ class EGNNLayer(nn.Module):
     def forward(
         self, features: torch.Tensor, positions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Update scalar node features and equivariant coordinates."""
+        """Update node features and coordinates without an E(n) constraint."""
+        if positions.shape[-1] != self.dimensions:
+            raise ValueError(
+                f"expected {self.dimensions} coordinate dimensions, got {positions.shape[-1]}"
+            )
         particles = positions.shape[1]
         difference = positions[:, :, None] - positions[:, None, :]
         distance = difference.square().sum(dim=-1, keepdim=True).clamp_min(1e-12).sqrt()
         radial = torch.exp(-self.gamma * (distance - self.centers.view(1, 1, 1, -1)).square())
-        left = features[:, :, None].expand(-1, -1, particles, -1)
-        right = features[:, None, :].expand(-1, particles, -1, -1)
-        messages = self.edge_mlp(torch.cat((left, right, radial), dim=-1))
+        left_features = features[:, :, None].expand(-1, -1, particles, -1)
+        right_features = features[:, None, :].expand(-1, particles, -1, -1)
+        left_positions = positions[:, :, None].expand(-1, -1, particles, -1)
+        right_positions = positions[:, None, :].expand(-1, particles, -1, -1)
+        messages = self.edge_mlp(
+            torch.cat(
+                (left_features, right_features, left_positions, right_positions, radial),
+                dim=-1,
+            )
+        )
         mask = (1.0 - torch.eye(particles, device=positions.device, dtype=positions.dtype))[
             None, :, :, None
         ]
         messages = messages * torch.sigmoid(self.edge_gate(messages)) * mask
-        weights = torch.tanh(self.coordinate_mlp(messages)) * mask
-        update = (difference * weights).sum(dim=2) / max(particles - 1, 1)
+        coordinate_messages = torch.tanh(self.coordinate_mlp(messages)) * mask
+        update = coordinate_messages.sum(dim=2) / max(particles - 1, 1)
         positions = center(positions + update)
         aggregate = messages.sum(dim=2) / max(particles - 1, 1)
         features = self.norm(features + self.node_mlp(torch.cat((features, aggregate), dim=-1)))
         return features, positions
 
 
-class ParticleGenerator(nn.Module):
-    """Direct equivariant map from mean-free Gaussian noise to positions."""
+class GNN(nn.Module):
+    """Direct non-equivariant GNN map from Gaussian noise to positions."""
 
     def __init__(
         self,
+        dimensions: int,
         feature_dim: int = 8,
         hidden_dim: int = 64,
         layers: int = 4,
@@ -69,7 +92,7 @@ class ParticleGenerator(nn.Module):
         max_distance: float = 8.0,
         fixed_atom_identity: int | None = None,
     ) -> None:
-        """Initialize a stack of complete-graph EGNN layers."""
+        """Initialize a stack of unconstrained complete-graph GNN layers."""
         super().__init__()
         self.feature_dim = feature_dim
         if fixed_atom_identity is not None and feature_dim != fixed_atom_identity:
@@ -80,16 +103,15 @@ class ParticleGenerator(nn.Module):
         )
         self.embedding = _mlp(feature_dim, hidden_dim, hidden_dim)
         self.layers = nn.ModuleList(
-            EGNNLayer(hidden_dim, radial_basis, max_distance) for _ in range(layers)
+            GNNLayer(hidden_dim, dimensions, radial_basis, max_distance) for _ in range(layers)
         )
 
     def forward(self, coordinate_noise: torch.Tensor, feature_noise: torch.Tensor) -> torch.Tensor:
-        """Map coordinate and scalar Gaussian noise to centered positions."""
+        """Map coordinate and node-feature noise to centered positions."""
         positions = center(coordinate_noise)
         if self.atom_identity is not None:
             if positions.shape[1] != len(self.atom_identity):
                 raise ValueError("coordinates do not match the configured atom identities")
-            # Fixed topology labels distinguish chemically inequivalent atom slots.
             feature_noise = self.atom_identity.unsqueeze(0).expand(len(positions), -1, -1)
         features = self.embedding(feature_noise)
         for layer in self.layers:

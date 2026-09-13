@@ -108,25 +108,28 @@ class AlanineTests(unittest.TestCase):
         self.assertTrue(math.isfinite(report["histogram"]["js"]))
 
     def test_fixed_atom_identity_is_required_and_replaces_feature_noise(self) -> None:
-        config = {
-            "system": "aldp",
-            "model": {
-                "feature_dim": 22,
-                "fixed_atom_identity": True,
-                "hidden_dim": 8,
-                "layers": 1,
-                "radial_basis": 4,
-                "max_distance": 8,
-            },
-        }
-        model = build_model(config)
         coordinates = molecular_frames(2)
-        first = model(coordinates, torch.randn(2, 22, 22))
-        second = model(coordinates, torch.randn(2, 22, 22))
-        torch.testing.assert_close(first, second)
-        config["model"]["fixed_atom_identity"] = False
-        with self.assertRaisesRegex(ValueError, "fixed_atom_identity"):
-            build_model(config)
+        for architecture in ("egnn", "gnn"):
+            with self.subTest(architecture=architecture):
+                config = {
+                    "system": "aldp",
+                    "model": {
+                        "architecture": architecture,
+                        "feature_dim": 22,
+                        "fixed_atom_identity": True,
+                        "hidden_dim": 8,
+                        "layers": 1,
+                        "radial_basis": 4,
+                        "max_distance": 8,
+                    },
+                }
+                model = build_model(config)
+                first = model(coordinates, torch.randn(2, 22, 22))
+                second = model(coordinates, torch.randn(2, 22, 22))
+                torch.testing.assert_close(first, second)
+                config["model"]["fixed_atom_identity"] = False
+                with self.assertRaisesRegex(ValueError, "fixed_atom_identity"):
+                    build_model(config)
 
     def test_training_uses_official_validation_split_and_writes_best_checkpoint(self) -> None:
         train, validation = molecular_frames(4), molecular_frames(5)
@@ -147,6 +150,7 @@ class AlanineTests(unittest.TestCase):
             "data": "unused.npz",
             "seed": 42,
             "model": {
+                "architecture": "egnn",
                 "feature_dim": 22,
                 "fixed_atom_identity": True,
                 "hidden_dim": 8,

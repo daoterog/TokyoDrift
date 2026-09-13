@@ -10,6 +10,7 @@
   "output": "results/alanine_dipeptide/gaussian/checkpoints",
   "seed": 42,
   "model": {
+    "architecture": "egnn",
     "feature_dim": 22,
     "fixed_atom_identity": true,
     "hidden_dim": 256,

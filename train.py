@@ -1,4 +1,4 @@
-"""Train an equivariant generator with optional kernel-mass-normalized drift."""
+"""Train a particle generator with optional kernel-mass-normalized drift."""
 
 from __future__ import annotations
 
@@ -17,7 +17,14 @@ from data.alanine_dipeptide.system import AlanineDrift
 from data.systems import ParticleSystem, get_system
 from drifting import Drifting, median_bandwidth
 from utils.descriptors import DescriptorDrift, descriptor_bandwidth
-from utils.io import build_model, device_summary, load_config, load_dataset, select_device
+from utils.io import (
+    build_model,
+    device_summary,
+    load_config,
+    load_dataset,
+    resolve_model_definition,
+    select_device,
+)
 from validation import ValidationEvaluator
 
 
@@ -335,7 +342,7 @@ def main() -> None:
         checkpoint_config = checkpoint["config"]
         if checkpoint_config["system"] != config["system"]:
             raise ValueError("resume checkpoint and config systems differ")
-        if checkpoint_config["model"] != config["model"]:
+        if resolve_model_definition(checkpoint_config) != resolve_model_definition(config):
             raise ValueError("resume checkpoint and config model definitions differ")
         if resolve_drift_definition(checkpoint_config) != drift_definition:
             raise ValueError("resume checkpoint and config drift definitions differ")
@@ -451,6 +458,7 @@ def main() -> None:
         json.dumps(
             {
                 "system": system.name,
+                "architecture": config["model"]["architecture"],
                 **device_summary(device),
                 "parameters": sum(p.numel() for p in model.parameters()),
                 "base_bandwidth": base_bandwidth,

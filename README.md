@@ -1,8 +1,8 @@
 # TokyoDrift
 
-Equivariant particle-generator experiments with coordinate- or descriptor-based Gaussian and
-Laplacian kernel drift. DW4 and LJ13 are the primary benchmarks; LJ55 and fixed-topology alanine
-dipeptide are retained as additional datasets.
+Particle-generator experiments with equivariant or standard graph neural networks and
+coordinate- or descriptor-based Gaussian and Laplacian kernel drift. DW4 and LJ13 are the primary
+benchmarks; LJ55 and fixed-topology alanine dipeptide are retained as additional datasets.
 
 ## Layout
 
@@ -13,11 +13,12 @@ dipeptide are retained as additional datasets.
 ├── validation.py              # deterministic checkpoint validation
 ├── evaluate.py                # DW4/LJ13/LJ55 evaluation
 ├── evaluate_alanine.py        # alanine-specific evaluation
+├── configs/                   # dataset training configurations
 ├── data/
-│   ├── dw4/                   # DW4 configs and local dataset
-│   ├── lj13/                  # LJ13 configs and local dataset
-│   ├── lj55/                  # retained LJ55 config and local dataset
-│   ├── alanine_dipeptide/     # config, preparation, geometry, energy, and metrics
+│   ├── dw4/                   # local DW4 dataset
+│   ├── lj13/                  # local LJ13 dataset
+│   ├── lj55/                  # local LJ55 dataset
+│   ├── alanine_dipeptide/     # preparation, geometry, energy, metrics, and local dataset
 │   ├── prepare.py             # particle dataset downloader/preparation
 │   └── systems.py             # benchmark definitions and potentials
 ├── models/                    # generator architectures
@@ -83,9 +84,10 @@ uv run --no-sync python -m train --config configs/dw4_config.json
 uv run --no-sync python -m train --config configs/lj13_config.json
 ```
 
-Every run must use its own output directory. Configurations support scalar, `"auto"`, or
-multi-scale bandwidths; Gaussian or Laplacian kernels; optional invariant sorted-pair-distance
-descriptors; and optional local kernel-mass normalization.
+Every run must use its own output directory. Set `model.architecture` to `"egnn"` for an
+E(n)-equivariant generator or `"gnn"` for an unconstrained graph neural network. Configurations
+also support scalar, `"auto"`, or multi-scale bandwidths; Gaussian or Laplacian kernels; optional
+invariant sorted-pair-distance descriptors; and optional local kernel-mass normalization.
 
 With descriptor drift, the comparison is invariant to translations, rotations, reflections, and
 permutations of identical particles. The sorted distance representation is not a complete

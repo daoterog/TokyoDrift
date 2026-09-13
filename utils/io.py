@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from data.systems import center, get_system
-from models.particle_generator import ParticleGenerator
+from models import EGNN, GNN
 
 
 def _mps_available() -> bool:
@@ -20,10 +20,11 @@ def _mps_available() -> bool:
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    """Load a JSON experiment configuration and validate its system name."""
+    """Load a JSON experiment configuration and validate its system and model."""
     with path.open() as stream:
         config = json.load(stream)
     get_system(config["system"])
+    config["model"] = resolve_model_definition(config)
     return config
 
 
@@ -41,25 +42,35 @@ def load_dataset(path: Path, split: str) -> tuple[torch.Tensor, dict[str, Any]]:
     return center(values), metadata
 
 
-def build_model(config: dict[str, Any]) -> ParticleGenerator:
+def resolve_model_definition(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a model definition with a validated architecture selector."""
+    model = dict(config["model"])
+    architecture = model.get("architecture", "egnn")
+    if architecture not in {"egnn", "gnn"}:
+        raise ValueError("model.architecture must be 'egnn' or 'gnn'")
+    model["architecture"] = architecture
+    return model
+
+
+def build_model(config: dict[str, Any]) -> torch.nn.Module:
     """Construct a particle generator from a resolved configuration."""
-    model = config["model"]
+    model = resolve_model_definition(config)
+    system = get_system(config["system"])
     if config["system"] == "aldp" and model.get("fixed_atom_identity") is not True:
         raise ValueError(
             "alanine requires model.fixed_atom_identity: true for its labeled topology"
         )
-    return ParticleGenerator(
+    arguments = dict(
         feature_dim=int(model["feature_dim"]),
         hidden_dim=int(model["hidden_dim"]),
         layers=int(model["layers"]),
         radial_basis=int(model["radial_basis"]),
         max_distance=float(model["max_distance"]),
-        fixed_atom_identity=(
-            get_system(config["system"]).particles
-            if model.get("fixed_atom_identity", False)
-            else None
-        ),
+        fixed_atom_identity=(system.particles if model.get("fixed_atom_identity", False) else None),
     )
+    if model["architecture"] == "egnn":
+        return EGNN(**arguments)
+    return GNN(dimensions=system.dimensions, **arguments)
 
 
 def select_device(requested: str) -> torch.device:
