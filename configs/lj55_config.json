@@ -7,7 +7,7 @@
     "descriptors": true
   },
   "data": "data/lj55/dataset.npz",
-  "output": "results/lj55/gaussian/checkpoints",
+  "output": "results/lj55/checkpoints",
   "seed": 42,
   "model": {
     "architecture": "egnn",
