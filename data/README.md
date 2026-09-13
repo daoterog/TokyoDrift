@@ -5,6 +5,7 @@ Each benchmark owns its configuration and local dataset directory:
 - `dw4/` and `lj13/` are the primary benchmarks.
 - `lj55/` is retained as the larger Lennard-Jones benchmark.
 - `alanine_dipeptide/` contains its fixed-topology data preparation and metrics.
+- `reports/` contains recorded dataset diagnostics, including descriptor-bandwidth audits.
 
 Prepared datasets and source downloads are local-only and ignored by Git. Prepare a particle
 dataset with `python -m data.prepare dw4`, `lj13`, or `lj55`. The default output is

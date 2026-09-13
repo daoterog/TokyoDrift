@@ -89,8 +89,8 @@ descriptors; and optional local kernel-mass normalization.
 With descriptor drift, the comparison is invariant to translations, rotations, reflections, and
 permutations of identical particles. The sorted distance representation is not a complete
 description of geometry, so descriptor matching alone does not establish full-configuration
-sampling quality. Bandwidth diagnostics and their recorded reports live under
-`utils/check_bandwidths.py` and `utils/reports/descriptor_bandwidths/`.
+sampling quality. The diagnostic helper lives at `utils/check_bandwidths.py`; its recorded reports
+live with the datasets under `data/reports/descriptor_bandwidths/`.
 
 Run a diagnostic with:
 
