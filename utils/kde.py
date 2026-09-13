@@ -249,7 +249,7 @@ def descriptor_kde_nll(
     *,
     center_count: int = 10_000,
     tuning_query_count: int = 2_000,
-    test_query_count: int = 10_000,
+    test_query_count: int = 50_000,
     query_batch_size: int = 256,
     bandwidth_candidates: Sequence[float] | None = None,
     device: torch.device | str = "cpu",

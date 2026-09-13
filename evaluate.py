@@ -59,7 +59,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--kde-queries",
         type=int,
-        default=10_000,
+        default=50_000,
         help="Held-out test configurations scored by the DW4/LJ13 KDE.",
     )
     parser.add_argument(
