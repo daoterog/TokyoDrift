@@ -3,7 +3,8 @@
   "drift": {
     "space": "particle_coordinates",
     "kernel": "gaussian",
-    "normalized": false
+    "normalized": false,
+    "descriptors": false
   },
   "data": "data/dw4/dataset.npz",
   "output": "results/dw4/checkpoints",

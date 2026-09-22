@@ -33,13 +33,15 @@ fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
 CONFIG="$REPOSITORY_ROOT/configs/lj13_config.json"
-RUN_DIRECTORY="$REPOSITORY_ROOT/results/lj13/$RUN_ID"
+cd "$REPOSITORY_ROOT"
+RUN_NAME="$("$UV" run --no-sync python -m utils.result_naming --config "$CONFIG" --id "$RUN_ID")"
+RUN_DIRECTORY="$REPOSITORY_ROOT/results/lj13/$RUN_NAME"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"
 PARAMETERS="$CHECKPOINT_DIRECTORY/parameters.json"
 
 if [[ -e "$RUN_DIRECTORY" ]]; then
-    echo "run $RUN_ID already exists; choose a different RUN_ID" >&2
+    echo "run $RUN_NAME already exists; choose a different RUN_ID" >&2
     exit 1
 fi
 mkdir -p "$CHECKPOINT_DIRECTORY"
@@ -51,10 +53,10 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 exec > >(tee "$RUN_DIRECTORY/train_and_evaluate.log") 2>&1
 
-cd "$REPOSITORY_ROOT"
 export PYTHONUNBUFFERED=1
 
 echo "run_id=$RUN_ID"
+echo "run_name=$RUN_NAME"
 echo "training_config=$CONFIG"
 echo "run_output=$RUN_DIRECTORY"
 echo "checkpoint_output=$CHECKPOINT_DIRECTORY"

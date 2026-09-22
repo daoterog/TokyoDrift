@@ -130,7 +130,10 @@ Alanine uses labeled pair distances rather than sorted identical-particle descri
 with `python -m evaluate_alanine`; validation combines periodic backbone-angle agreement with
 geometry validity, and the full evaluation can add AMBER ff96/OBC1 energy metrics.
 
-The Slurm jobs in `jobs/` keep each run self-contained under `results/<dataset>/<run-id>/`.
+The DW4, LJ13, and LJ55 Slurm jobs keep each run self-contained under
+`results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/`. The architecture,
+normalization, and descriptor labels are read from the selected JSON config. For example, run 123
+with an unnormalized descriptor EGNN is stored in `123_egnn_unnorm_descr/`.
 Training writes into its `checkpoints/` child; evaluation writes metrics, arrays, plots, and the
 combined job log into the run directory. The DW4, LJ13, and LJ55 jobs reserve the configured
 training holdout for checkpoint selection, write the lowest-validation-energy-Wasserstein
@@ -140,7 +143,7 @@ configured checkpoint interval in `checkpoints/train_test_history.jsonl`; the te
 diagnostic and does not select the checkpoint.
 
 ```text
-results/<dataset>/<run-id>/
+results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/
 ├── checkpoints/               # periodic, latest, selected, and final checkpoints
 ├── metrics.json
 ├── distributions.png          # particle benchmarks
