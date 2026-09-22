@@ -11,6 +11,8 @@
   "seed": 42,
   "model": {
     "architecture": "egnn",
+    "variant": "bounded",
+    "coordinate_range": 1.0,
     "feature_dim": 8,
     "hidden_dim": 256,
     "layers": 9,

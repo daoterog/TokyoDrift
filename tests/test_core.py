@@ -20,7 +20,7 @@ from evaluate import (
     validity_metrics,
     wasserstein_1,
 )
-from models import EGNN, GNN
+from models import EGNN, GNN, EGNNLayer
 from train import (
     EnergyStratifiedReferenceSampler,
     bandwidth_scale,
@@ -351,15 +351,46 @@ class BandwidthScheduleTests(unittest.TestCase):
 
 class ModelTests(unittest.TestCase):
     def test_egnn_is_permutation_and_rotation_equivariant(self) -> None:
-        torch.manual_seed(4)
-        model = EGNN(feature_dim=3, hidden_dim=16, layers=2, radial_basis=6)
-        positions = center(torch.randn(2, 4, 2))
-        features = torch.randn(2, 4, 3)
-        permutation = torch.tensor([2, 0, 3, 1])
-        rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        expected = model(positions, features)[:, permutation] @ rotation.T
-        actual = model(positions[:, permutation] @ rotation.T, features[:, permutation])
-        self.assertTrue(torch.allclose(actual, expected, atol=2e-5, rtol=2e-5))
+        for variant in ("legacy", "bounded"):
+            with self.subTest(variant=variant):
+                torch.manual_seed(4)
+                model = EGNN(
+                    feature_dim=3,
+                    hidden_dim=16,
+                    layers=2,
+                    radial_basis=6,
+                    variant=variant,
+                )
+                positions = center(torch.randn(2, 4, 2))
+                features = torch.randn(2, 4, 3)
+                permutation = torch.tensor([2, 0, 3, 1])
+                rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+                expected = model(positions, features)[:, permutation] @ rotation.T
+                actual = model(positions[:, permutation] @ rotation.T, features[:, permutation])
+                self.assertTrue(torch.allclose(actual, expected, atol=2e-5, rtol=2e-5))
+
+    def test_bounded_egnn_coordinate_update_does_not_scale_with_distance(self) -> None:
+        layer = EGNNLayer(
+            hidden_dim=4,
+            radial_basis=4,
+            variant="bounded",
+            coordinate_range=0.5,
+        )
+        with torch.no_grad():
+            for parameter in layer.coordinate_mlp.parameters():
+                parameter.zero_()
+            layer.coordinate_mlp[-1].bias.fill_(100)
+        positions = center(
+            torch.tensor([[[1e6, 0.0], [-1e6, 0.0], [0.0, 1e6], [0.0, -1e6]]])
+        )
+        features = torch.zeros(1, 4, 4)
+        difference = positions[:, :, None] - positions[:, None, :]
+        initial_squared_distance = difference.square().sum(dim=-1, keepdim=True)
+
+        _, updated = layer(features, positions, initial_squared_distance)
+
+        displacement = updated - positions
+        self.assertLessEqual(float(displacement.norm(dim=-1).max().detach()), 1.0 + 1e-6)
 
     def test_gnn_is_permutation_equivariant_but_not_rotation_equivariant(self) -> None:
         torch.manual_seed(4)
@@ -398,6 +429,19 @@ class ModelTests(unittest.TestCase):
                 }
                 self.assertIsInstance(build_model(config), expected_type)
         self.assertIsInstance(build_model({"system": "dw4", "model": definition}), EGNN)
+        bounded = build_model(
+            {
+                "system": "dw4",
+                "model": {
+                    **definition,
+                    "architecture": "egnn",
+                    "variant": "bounded",
+                    "coordinate_range": 0.5,
+                },
+            }
+        )
+        self.assertEqual(bounded.variant, "bounded")
+        self.assertEqual(bounded.coordinate_range, 0.5)
         with self.assertRaisesRegex(ValueError, "model.architecture"):
             build_model(
                 {

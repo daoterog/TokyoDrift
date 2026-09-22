@@ -99,6 +99,12 @@ neural network whose coordinate updates are not constrained to be E(n)-equivaria
 also support scalar, `"auto"`, or multi-scale bandwidths; Gaussian or Laplacian kernels; optional
 invariant sorted-pair-distance descriptors; and optional local kernel-mass normalization.
 
+Checked-in EGNN configs use `model.variant: "bounded"`. This variant keeps the local radial basis,
+adds transformed initial and current squared-distance edge features, and uses bounded relative
+directions for coordinate updates. `model.coordinate_range` scales the maximum mean coordinate
+message per layer. Configs without a variant resolve to `"legacy"` so existing checkpoints retain
+their original parameter shapes and behavior.
+
 With descriptor drift, the comparison is invariant to translations, rotations, reflections, and
 permutations of identical particles. The sorted distance representation is not a complete
 description of geometry, so descriptor matching alone does not establish full-configuration

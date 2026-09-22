@@ -23,7 +23,7 @@ class ResultFolderNamingTests(unittest.TestCase):
     def test_checked_in_particle_configs_have_expected_names(self):
         root = Path(__file__).parents[1]
         expected = {
-            "dw4": "example_egnn_unnorm_nodescr",
+            "dw4": "example_egnn_unnorm_descr",
             "lj13": "example_egnn_unnorm_descr",
             "lj55": "example_egnn_unnorm_descr",
         }

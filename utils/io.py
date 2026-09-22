@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,17 @@ def resolve_model_definition(config: dict[str, Any]) -> dict[str, Any]:
     if architecture not in {"egnn", "gnn"}:
         raise ValueError("model.architecture must be 'egnn' or 'gnn'")
     model["architecture"] = architecture
+    if architecture == "egnn":
+        # Missing means legacy so checkpoints written before the bounded EGNN
+        # variant retain the parameter shapes they were trained with.
+        variant = str(model.get("variant", "legacy"))
+        if variant not in {"legacy", "bounded"}:
+            raise ValueError("model.variant must be 'legacy' or 'bounded'")
+        coordinate_range = float(model.get("coordinate_range", 1.0))
+        if not math.isfinite(coordinate_range) or coordinate_range <= 0:
+            raise ValueError("model.coordinate_range must be finite and positive")
+        model["variant"] = variant
+        model["coordinate_range"] = coordinate_range
     return model
 
 
@@ -60,7 +72,7 @@ def build_model(config: dict[str, Any]) -> torch.nn.Module:
         raise ValueError(
             "alanine requires model.fixed_atom_identity: true for its labeled topology"
         )
-    arguments = dict(
+    common_arguments = dict(
         feature_dim=int(model["feature_dim"]),
         hidden_dim=int(model["hidden_dim"]),
         layers=int(model["layers"]),
@@ -69,8 +81,12 @@ def build_model(config: dict[str, Any]) -> torch.nn.Module:
         fixed_atom_identity=(system.particles if model.get("fixed_atom_identity", False) else None),
     )
     if model["architecture"] == "egnn":
-        return EGNN(**arguments)
-    return GNN(dimensions=system.dimensions, **arguments)
+        return EGNN(
+            **common_arguments,
+            variant=str(model["variant"]),
+            coordinate_range=float(model["coordinate_range"]),
+        )
+    return GNN(dimensions=system.dimensions, **common_arguments)
 
 
 def select_device(requested: str) -> torch.device:
