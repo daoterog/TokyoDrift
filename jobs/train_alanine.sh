@@ -62,13 +62,11 @@ if [[ ! -s "$PARAMETERS" ]]; then
     echo "training did not write $PARAMETERS" >&2
     exit 1
 fi
-# Only the official validation split selects the checkpoint; test is used below.
-SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/best_validation.pt"
-if [[ ! -s "$SELECTED_CHECKPOINT" ]]; then
-    SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/latest.pt"
+if [[ ! -s "$FINAL_CHECKPOINT" ]]; then
+    echo "training did not write $FINAL_CHECKPOINT" >&2
+    exit 1
 fi
-echo "selected_checkpoint=$SELECTED_CHECKPOINT"
-cp "$SELECTED_CHECKPOINT" "$FINAL_CHECKPOINT"
+echo "selected_checkpoint=$FINAL_CHECKPOINT"
 "$UV" run --no-sync python -m evaluate_alanine --checkpoint "$FINAL_CHECKPOINT" \
     --output "$RUN_DIRECTORY" --device cuda --batch-size 256 \
     --num-samples 500000 --energy-samples 10000

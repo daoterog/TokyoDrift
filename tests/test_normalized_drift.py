@@ -152,7 +152,7 @@ class NormalizedDriftTests(unittest.TestCase):
             ):
                 with patch("sys.argv", argv):
                     train_main()
-                checkpoint_path = root / "run/latest.pt"
+                checkpoint_path = root / "run/final.pt"
                 checkpoint = torch.load(checkpoint_path, weights_only=False)
                 self.assertTrue(checkpoint["config"]["drift"]["normalized"])
                 self.assertEqual(checkpoint["config"]["model"], original_model)

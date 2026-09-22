@@ -35,12 +35,12 @@
     "gradient_clip": 1.0,
     "ema_decay": null,
     "log_every": 2,
-    "checkpoint_every": 20,
+    "early_stopping_epsilon": 0.000001,
+    "early_stopping_patience": 20,
     "validation_split": "validation",
     "validation_every": 20,
     "validation_generated_samples": 4096,
     "validation_batch_size": 256,
-    "validation_positive_references": 1024,
-    "validation_metric": "selection_score"
+    "validation_positive_references": 1024
   }
 }

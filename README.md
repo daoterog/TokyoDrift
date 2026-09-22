@@ -134,17 +134,16 @@ The DW4, LJ13, and LJ55 Slurm jobs keep each run self-contained under
 `results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/`. The architecture,
 normalization, and descriptor labels are read from the selected JSON config. For example, run 123
 with an unnormalized descriptor EGNN is stored in `123_egnn_unnorm_descr/`.
-Training writes into its `checkpoints/` child; evaluation writes metrics, arrays, plots, and the
-combined job log into the run directory. The DW4, LJ13, and LJ55 jobs reserve the configured
-training holdout for checkpoint selection, write the lowest-validation-energy-Wasserstein
-checkpoint as `best_validation.pt`, and copy that checkpoint to `final.pt` for full evaluation.
-They also record fixed-sample train/test drift loss and energy Wasserstein distance at each
-configured checkpoint interval in `checkpoints/train_test_history.jsonl`; the test history is
-diagnostic and does not select the checkpoint.
+Training writes a single `checkpoints/final.pt` at the configured epoch limit or when mean epoch
+training loss fails to improve by more than `early_stopping_epsilon` for
+`early_stopping_patience` consecutive epochs. Validation remains diagnostic and does not select
+a checkpoint. The particle jobs also record fixed-sample train/test drift loss and energy
+Wasserstein distance at each configured tracking interval in
+`checkpoints/train_test_history.jsonl`.
 
 ```text
 results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/
-├── checkpoints/               # periodic, latest, selected, and final checkpoints
+├── checkpoints/               # parameters, diagnostic histories, and final.pt
 ├── metrics.json
 ├── distributions.png          # particle benchmarks
 ├── energy_all_samples.png     # particle benchmarks

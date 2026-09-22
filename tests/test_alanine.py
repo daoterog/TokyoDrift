@@ -131,7 +131,7 @@ class AlanineTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "fixed_atom_identity"):
                     build_model(config)
 
-    def test_training_uses_official_validation_split_and_writes_best_checkpoint(self) -> None:
+    def test_training_uses_official_validation_split_and_writes_final_checkpoint(self) -> None:
         train, validation = molecular_frames(4), molecular_frames(5)
         metadata = {
             "system": "aldp",
@@ -172,13 +172,13 @@ class AlanineTests(unittest.TestCase):
                 "gradient_clip": 1,
                 "ema_decay": None,
                 "log_every": 1,
-                "checkpoint_every": 1,
+                "early_stopping_epsilon": 1e-6,
+                "early_stopping_patience": 20,
                 "validation_split": "validation",
                 "validation_every": 1,
                 "validation_generated_samples": 2,
                 "validation_batch_size": 2,
                 "validation_positive_references": 2,
-                "validation_metric": "selection_score",
             },
         }
 
@@ -204,13 +204,14 @@ class AlanineTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 train_main()
-            self.assertTrue((root / "run/best_validation.pt").is_file())
-            record = json.loads((root / "run/best_validation.json").read_text())
+            self.assertTrue((root / "run/final.pt").is_file())
+            self.assertFalse((root / "run/best_validation.pt").exists())
+            record = json.loads((root / "run/validation.jsonl").read_text().splitlines()[-1])
             self.assertIn("selection_score", record["validation"])
             evaluation_arguments = [
                 "evaluate_alanine",
                 "--checkpoint",
-                str(root / "run/best_validation.pt"),
+                str(root / "run/final.pt"),
                 "--output",
                 str(root / "evaluation"),
                 "--device",

@@ -70,6 +70,33 @@ class EnergyStratifiedReferenceSampler:
         return batches
 
 
+@dataclass
+class EarlyStopping:
+    """Stop after a sustained lack of meaningful epoch-loss improvement."""
+
+    epsilon: float
+    patience: int
+    best_loss: float = float("inf")
+    epochs_without_improvement: int = 0
+
+    def __post_init__(self) -> None:
+        if self.epsilon < 0:
+            raise ValueError("early_stopping_epsilon must be nonnegative")
+        if self.patience <= 0:
+            raise ValueError("early_stopping_patience must be positive")
+
+    def update(self, loss: float) -> bool:
+        """Record an epoch loss and report whether patience is exhausted."""
+        if not math.isfinite(loss):
+            raise RuntimeError(f"non-finite training loss encountered: {loss}")
+        if loss < self.best_loss - self.epsilon:
+            self.best_loss = loss
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+        return self.epochs_without_improvement >= self.patience
+
+
 def epoch_reference_batches(
     sample_count: int, batch_size: int, generator: torch.Generator
 ) -> list[torch.Tensor]:
@@ -216,6 +243,7 @@ def save_checkpoint(
     epoch: int,
     global_step: int,
     generator: torch.Generator,
+    early_stopping: EarlyStopping,
 ) -> None:
     """Write a restartable model and optimizer checkpoint."""
     torch.save(
@@ -228,6 +256,10 @@ def save_checkpoint(
             "bandwidth": bandwidth,
             "epoch": epoch,
             "global_step": global_step,
+            "early_stopping": {
+                "best_loss": early_stopping.best_loss,
+                "epochs_without_improvement": early_stopping.epochs_without_improvement,
+            },
             # Retained for evaluation tools and old checkpoint consumers.
             "step": global_step,
             "reference_generator_rng": generator.get_state(),
@@ -364,6 +396,10 @@ def main() -> None:
     epochs = int(training["epochs"])
     if epochs <= 0:
         raise ValueError("training.epochs must be positive")
+    early_stopping = EarlyStopping(
+        epsilon=float(training.get("early_stopping_epsilon", 1e-6)),
+        patience=int(training.get("early_stopping_patience", 20)),
+    )
     batches_per_epoch = math.ceil(len(train_data) / reference_batch_size)
     generator = torch.Generator().manual_seed(seed)
     start_epoch = 1
@@ -391,6 +427,11 @@ def main() -> None:
             group["weight_decay"] = float(training["weight_decay"])
         start_epoch = int(checkpoint["epoch"]) + 1
         global_step = int(checkpoint["global_step"])
+        early_stopping_state = checkpoint.get("early_stopping", {})
+        early_stopping.best_loss = float(early_stopping_state.get("best_loss", float("inf")))
+        early_stopping.epochs_without_improvement = int(
+            early_stopping_state.get("epochs_without_improvement", 0)
+        )
         generator.set_state(checkpoint["reference_generator_rng"])
         torch.set_rng_state(checkpoint["torch_rng"])
         random.setstate(checkpoint["python_rng"])
@@ -486,12 +527,12 @@ def main() -> None:
     eta = float(training["eta"])
     repulsion = float(training["repulsion"])
     log_every = int(training["log_every"])
-    checkpoint_every = int(training["checkpoint_every"])
-    validation_every = int(training.get("validation_every", checkpoint_every))
-    tracking_every = int(training.get("tracking_every", checkpoint_every))
+    validation_every = int(training.get("validation_every", log_every))
+    tracking_every = int(training.get("tracking_every", log_every))
+    if validator is not None and validation_every <= 0:
+        raise ValueError("validation_every must be positive")
     if track_train_test and tracking_every <= 0:
         raise ValueError("tracking_every must be positive")
-    best_validation_score = float("inf")
     print(
         json.dumps(
             {
@@ -516,6 +557,8 @@ def main() -> None:
                 "batches_per_epoch": batches_per_epoch,
                 "epochs": epochs,
                 "optimizer_steps": epochs * batches_per_epoch,
+                "early_stopping_epsilon": early_stopping.epsilon,
+                "early_stopping_patience": early_stopping.patience,
                 "resume": str(args.resume) if args.resume is not None else None,
                 "start_epoch": start_epoch,
                 "global_step": global_step,
@@ -586,7 +629,10 @@ def main() -> None:
             for name, value in batch_metrics.items():
                 epoch_totals[name] = epoch_totals.get(name, 0.0) + value
 
-        if epoch == start_epoch or epoch % log_every == 0:
+        epoch_loss = epoch_totals["loss"] / len(reference_batches)
+        should_stop = early_stopping.update(epoch_loss)
+        final_epoch = should_stop or epoch == epochs
+        if epoch == start_epoch or epoch % log_every == 0 or final_epoch:
             record = {
                 "epoch": epoch,
                 "global_step": global_step,
@@ -596,9 +642,11 @@ def main() -> None:
                 "bandwidth": current_bandwidth,
                 "learning_rate": current_learning_rate,
                 "reference_radius": reference_radius,
+                "best_training_loss": early_stopping.best_loss,
+                "epochs_without_improvement": early_stopping.epochs_without_improvement,
             }
             print(json.dumps(record))
-        if validator is not None and (epoch % validation_every == 0 or epoch == epochs):
+        if validator is not None and (epoch % validation_every == 0 or final_epoch):
             validation_model = ema if ema is not None else model
             validation_metrics = validator.evaluate(validation_model, drift, device)
             validation_record = {
@@ -609,26 +657,10 @@ def main() -> None:
             print(json.dumps(validation_record))
             with (outdir / "validation.jsonl").open("a") as stream:
                 stream.write(json.dumps(validation_record) + "\n")
-            score = validation_metrics[training.get("validation_metric", "energy_wasserstein_1")]
-            if score < best_validation_score:
-                best_validation_score = score
-                save_checkpoint(
-                    outdir / "best_validation.pt",
-                    model,
-                    ema,
-                    optimizer,
-                    config,
-                    current_bandwidth,
-                    epoch,
-                    global_step,
-                    generator,
-                )
-                with (outdir / "best_validation.json").open("w") as stream:
-                    json.dump(validation_record, stream, indent=2)
         if (
             train_tracker is not None
             and test_tracker is not None
-            and (epoch % tracking_every == 0 or epoch == epochs)
+            and (epoch % tracking_every == 0 or final_epoch)
         ):
             tracking_model = ema if ema is not None else model
             tracking_samples = train_tracker.generated_samples(tracking_model, device)
@@ -644,9 +676,9 @@ def main() -> None:
             print(json.dumps({"train_test_tracking": tracking_record}))
             with (outdir / "train_test_history.jsonl").open("a") as stream:
                 stream.write(json.dumps(tracking_record) + "\n")
-        if epoch % checkpoint_every == 0 or epoch == epochs:
+        if final_epoch:
             save_checkpoint(
-                outdir / f"checkpoint_epoch_{epoch:07d}.pt",
+                outdir / "final.pt",
                 model,
                 ema,
                 optimizer,
@@ -655,18 +687,23 @@ def main() -> None:
                 epoch,
                 global_step,
                 generator,
+                early_stopping,
             )
-            save_checkpoint(
-                outdir / "latest.pt",
-                model,
-                ema,
-                optimizer,
-                config,
-                current_bandwidth,
-                epoch,
-                global_step,
-                generator,
+        if should_stop:
+            print(
+                json.dumps(
+                    {
+                        "early_stopping": {
+                            "epoch": epoch,
+                            "training_loss": epoch_loss,
+                            "best_training_loss": early_stopping.best_loss,
+                            "epsilon": early_stopping.epsilon,
+                            "patience": early_stopping.patience,
+                        }
+                    }
+                )
             )
+            break
 
 
 if __name__ == "__main__":

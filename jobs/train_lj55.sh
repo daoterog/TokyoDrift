@@ -75,14 +75,11 @@ if [[ ! -s "$PARAMETERS" ]]; then
     echo "training completed without a parameter snapshot at $PARAMETERS" >&2
     exit 1
 fi
-# Select only on the held-out training subset configured in lj55_config.json.
-# Periodic test metrics are diagnostic and never participate in selection.
-SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/best_validation.pt"
-if [[ ! -s "$SELECTED_CHECKPOINT" ]]; then
-    SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/latest.pt"
+if [[ ! -s "$FINAL_CHECKPOINT" ]]; then
+    echo "training completed without a final checkpoint at $FINAL_CHECKPOINT" >&2
+    exit 1
 fi
-echo "selected_checkpoint=$SELECTED_CHECKPOINT"
-cp "$SELECTED_CHECKPOINT" "$FINAL_CHECKPOINT"
+echo "selected_checkpoint=$FINAL_CHECKPOINT"
 
 TRAIN_TEST_HISTORY="$CHECKPOINT_DIRECTORY/train_test_history.jsonl"
 if [[ ! -s "$TRAIN_TEST_HISTORY" ]]; then
