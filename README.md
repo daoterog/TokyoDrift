@@ -132,7 +132,12 @@ geometry validity, and the full evaluation can add AMBER ff96/OBC1 energy metric
 
 The Slurm jobs in `jobs/` keep each run self-contained under `results/<dataset>/<run-id>/`.
 Training writes into its `checkpoints/` child; evaluation writes metrics, arrays, plots, and the
-combined job log into the run directory.
+combined job log into the run directory. The DW4, LJ13, and LJ55 jobs reserve the configured
+training holdout for checkpoint selection, write the lowest-validation-energy-Wasserstein
+checkpoint as `best_validation.pt`, and copy that checkpoint to `final.pt` for full evaluation.
+They also record fixed-sample train/test drift loss and energy Wasserstein distance at each
+configured checkpoint interval in `checkpoints/train_test_history.jsonl`; the test history is
+diagnostic and does not select the checkpoint.
 
 ```text
 results/<dataset>/<run-id>/
@@ -141,6 +146,8 @@ results/<dataset>/<run-id>/
 ├── distributions.png          # particle benchmarks
 ├── energy_all_samples.png     # particle benchmarks
 ├── energy_valid_samples.png   # particle benchmarks
+├── loss_over_epochs.png       # periodic particle train/test drift loss
+├── energy_wasserstein_over_epochs.png # periodic particle train/test distance
 ├── ramachandran.png           # alanine
 ├── free_energy.png            # alanine
 ├── slurm.out                  # scheduler output when submitted with Slurm

@@ -318,6 +318,41 @@ def main() -> None:
             training,
             seed,
         )
+    track_train_test = training.get("track_train_test_metrics", False)
+    if type(track_train_test) is not bool:
+        raise ValueError("track_train_test_metrics must be true or false")
+    train_tracker = None
+    test_tracker = None
+    if track_train_test:
+        test_data, test_metadata = load_dataset(Path(config["data"]), "test")
+        if test_metadata["system"] != system.name:
+            raise ValueError("test dataset system differs")
+        tracking_config = {
+            **training,
+            "validation_generated_samples": int(training.get("tracking_generated_samples", 10_000)),
+            "validation_batch_size": int(training.get("tracking_batch_size", 512)),
+            "validation_positive_references": int(
+                training.get("tracking_positive_references", 1024)
+            ),
+            "validation_reference_samples": int(training.get("tracking_reference_samples", 10_000)),
+        }
+        tracking_seed = seed + 2_000_003
+        train_tracker = ValidationEvaluator.build(
+            train_data,
+            system,
+            int(config["model"]["feature_dim"]),
+            float(training["coordinate_noise_scale"]),
+            tracking_config,
+            tracking_seed,
+        )
+        test_tracker = ValidationEvaluator.build(
+            test_data,
+            system,
+            int(config["model"]["feature_dim"]),
+            float(training["coordinate_noise_scale"]),
+            tracking_config,
+            tracking_seed,
+        )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(training["learning_rate"]),
@@ -453,6 +488,9 @@ def main() -> None:
     log_every = int(training["log_every"])
     checkpoint_every = int(training["checkpoint_every"])
     validation_every = int(training.get("validation_every", checkpoint_every))
+    tracking_every = int(training.get("tracking_every", checkpoint_every))
+    if track_train_test and tracking_every <= 0:
+        raise ValueError("tracking_every must be positive")
     best_validation_score = float("inf")
     print(
         json.dumps(
@@ -587,6 +625,25 @@ def main() -> None:
                 )
                 with (outdir / "best_validation.json").open("w") as stream:
                     json.dump(validation_record, stream, indent=2)
+        if (
+            train_tracker is not None
+            and test_tracker is not None
+            and (epoch % tracking_every == 0 or epoch == epochs)
+        ):
+            tracking_model = ema if ema is not None else model
+            tracking_samples = train_tracker.generated_samples(tracking_model, device)
+            train_metrics = train_tracker.evaluate_generated(tracking_samples, drift, device)
+            test_metrics = test_tracker.evaluate_generated(tracking_samples, drift, device)
+            tracking_record = {
+                "system": system.name,
+                "epoch": epoch,
+                "global_step": global_step,
+                "train": train_metrics,
+                "test": test_metrics,
+            }
+            print(json.dumps({"train_test_tracking": tracking_record}))
+            with (outdir / "train_test_history.jsonl").open("a") as stream:
+                stream.write(json.dumps(tracking_record) + "\n")
         if epoch % checkpoint_every == 0 or epoch == epochs:
             save_checkpoint(
                 outdir / f"checkpoint_epoch_{epoch:07d}.pt",

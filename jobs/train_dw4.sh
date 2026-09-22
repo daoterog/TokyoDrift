@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --job-name=train-dw4
 #SBATCH --output=train-dw4-%j.out
@@ -71,7 +71,23 @@ if [[ ! -s "$PARAMETERS" ]]; then
     echo "training completed without a parameter snapshot at $PARAMETERS" >&2
     exit 1
 fi
-cp "$CHECKPOINT_DIRECTORY/latest.pt" "$FINAL_CHECKPOINT"
+# Select only on the held-out training subset configured in dw4_config.json.
+# Periodic test metrics are diagnostic and never participate in selection.
+SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/best_validation.pt"
+if [[ ! -s "$SELECTED_CHECKPOINT" ]]; then
+    SELECTED_CHECKPOINT="$CHECKPOINT_DIRECTORY/latest.pt"
+fi
+echo "selected_checkpoint=$SELECTED_CHECKPOINT"
+cp "$SELECTED_CHECKPOINT" "$FINAL_CHECKPOINT"
+
+TRAIN_TEST_HISTORY="$CHECKPOINT_DIRECTORY/train_test_history.jsonl"
+if [[ ! -s "$TRAIN_TEST_HISTORY" ]]; then
+    echo "training completed without train/test history at $TRAIN_TEST_HISTORY" >&2
+    exit 1
+fi
+"$UV" run --no-sync python -m plot_training_history \
+    --history "$TRAIN_TEST_HISTORY" \
+    --output "$RUN_DIRECTORY"
 
 "$UV" run --no-sync python -m evaluate \
     --checkpoint "$FINAL_CHECKPOINT" \

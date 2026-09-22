@@ -121,7 +121,13 @@ class NormalizedDriftTests(unittest.TestCase):
         config["model"]["architecture"] = "gnn"
         original_model = config["model"].copy()
         # Exercise the real LJ55 architecture with a tiny synthetic reference split.
-        config["training"].update(epochs=1, batch_size=2, positive_references=2)
+        config["training"].update(
+            epochs=1,
+            batch_size=2,
+            positive_references=2,
+            validation_holdout=0,
+            track_train_test_metrics=False,
+        )
         samples = torch.randn(3, 55, 3)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -39,13 +39,21 @@ class ValidationEvaluator:
         samples = int(training.get("validation_generated_samples", 10_000))
         batch_size = int(training.get("validation_batch_size", 512))
         positive_references = int(training.get("validation_positive_references", 1024))
-        if len(reference) < positive_references:
-            raise ValueError("validation holdout is smaller than validation reference count")
+        reference_samples = int(training.get("validation_reference_samples", len(reference)))
+        if samples <= 0 or batch_size <= 0 or positive_references <= 0 or reference_samples <= 0:
+            raise ValueError("validation sample and batch counts must be positive")
+        if min(len(reference), reference_samples) < positive_references:
+            raise ValueError("validation reference set is smaller than positive reference count")
         generator = torch.Generator().manual_seed(seed + 1_000_003)
         coordinate_noise = coordinate_scale * torch.randn(
             samples, system.particles, system.dimensions, generator=generator
         )
         feature_noise = torch.randn(samples, system.particles, feature_dim, generator=generator)
+        if len(reference) > reference_samples:
+            reference_indices = torch.randperm(len(reference), generator=generator)[
+                :reference_samples
+            ]
+            reference = reference[reference_indices]
         indices = torch.randperm(len(reference), generator=generator)[:positive_references]
         return cls(
             reference=reference,
@@ -83,6 +91,12 @@ class ValidationEvaluator:
     ) -> dict[str, float]:
         """Return fixed drift loss and held-out distribution metrics."""
         generated = self.generated_samples(model, device)
+        return self.evaluate_generated(generated, drift, device)
+
+    def evaluate_generated(
+        self, generated: torch.Tensor, drift: Drifting, device: torch.device
+    ) -> dict[str, float]:
+        """Score pre-generated samples against this evaluator's fixed references."""
         drift_batch = generated[: self.batch_size].to(device)
         field, _ = drift(
             drift_batch,
