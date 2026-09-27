@@ -13,3 +13,13 @@ dataset with `python -m data.prepare dw4`, `lj13`, or `lj55`. The default output
 `python -m data.alanine_dipeptide.prepare`.
 
 On a compute node, run `jobs/download_env.sh` and then `jobs/download_datasets.sh`.
+
+After preparing the datasets, create JSON summaries and distribution plots for all three particle
+systems with:
+
+```bash
+uv run --no-sync python -m data.summarize
+```
+
+Outputs are written to `reports/dataset_summaries/<system>/`. Pass one or more archive paths to
+summarize only those datasets, or use `--help` to adjust the deterministic sampling limits.

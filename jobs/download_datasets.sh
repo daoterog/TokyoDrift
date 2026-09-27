@@ -31,5 +31,9 @@ fi
 cd "$REPOSITORY_ROOT"
 for SYSTEM in dw4 lj13 lj55; do
     "$UV" run --no-sync python -m data.prepare "$SYSTEM" \
+        --train-size 100000 \
+        --validation-size 400000 \
+        --test-size 500000 \
+        --ordered \
         --output "$REPOSITORY_ROOT/data/$SYSTEM/dataset.npz"
 done

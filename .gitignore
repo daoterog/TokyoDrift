@@ -231,3 +231,4 @@ data/**/*.prmtop
 .DS_Store
 
 *.pt
+data/reports/

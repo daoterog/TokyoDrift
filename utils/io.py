@@ -30,7 +30,7 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def load_dataset(path: Path, split: str) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Load a centered train or test split from a prepared archive."""
+    """Load a centered split from a prepared archive."""
     with np.load(path, allow_pickle=False) as archive:
         values = torch.from_numpy(np.asarray(archive[split], dtype=np.float32))
         metadata = json.loads(str(archive["metadata"].item()))

@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+import numpy as np
+
+from data.prepare import prepare, reshape_and_center, sha256
+from data.systems import DatasetSource, ParticleSystem
+
+
+class DataPreparationTests(unittest.TestCase):
+    def test_ordered_preparation_writes_train_validation_and_test_splits(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "source.npy"
+            output_path = root / "dataset.npz"
+            coordinates = np.arange(40, dtype=np.float32).reshape(10, 4)
+            coordinates[:, 0] += np.arange(10, dtype=np.float32) ** 2
+            np.save(source_path, coordinates)
+            system = ParticleSystem(
+                name="toy",
+                particles=2,
+                dimensions=2,
+                energy=None,
+                sources=(
+                    DatasetSource(
+                        filename=source_path.name,
+                        url="https://example.invalid/source.npy",
+                        sha256=sha256(source_path),
+                        shape=coordinates.shape,
+                    ),
+                ),
+                paper_reference={},
+            )
+
+            with patch("data.prepare.get_system", return_value=system):
+                prepare(
+                    "toy",
+                    source_path,
+                    output_path,
+                    train_size=2,
+                    validation_size=3,
+                    test_size=5,
+                    seed=2023,
+                    ordered=True,
+                )
+
+            with np.load(output_path, allow_pickle=False) as archive:
+                self.assertEqual(set(archive.files), {"train", "validation", "test", "metadata"})
+                np.testing.assert_array_equal(
+                    archive["train"], reshape_and_center(coordinates[:2], 2, 2)
+                )
+                np.testing.assert_array_equal(
+                    archive["validation"], reshape_and_center(coordinates[2:5], 2, 2)
+                )
+                np.testing.assert_array_equal(
+                    archive["test"], reshape_and_center(coordinates[5:], 2, 2)
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

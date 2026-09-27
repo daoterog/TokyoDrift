@@ -28,8 +28,14 @@ def arguments() -> argparse.Namespace:
         help="Use existing official NPY file(s), in the published part order.",
     )
     parser.add_argument("--train-size", type=int, default=100_000)
+    parser.add_argument("--validation-size", type=int, default=0)
     parser.add_argument("--test-size", type=int, default=100_000)
     parser.add_argument("--seed", type=int, default=2023)
+    parser.add_argument(
+        "--ordered",
+        action="store_true",
+        help="Use the first requested rows in published order instead of sampling them.",
+    )
     return parser.parse_args()
 
 
@@ -99,6 +105,8 @@ def prepare(
     train_size: int,
     test_size: int,
     seed: int,
+    validation_size: int = 0,
+    ordered: bool = False,
 ) -> None:
     """Verify and convert official source file(s) into deterministic splits."""
     system = get_system(system_name)
@@ -107,8 +115,10 @@ def prepare(
         raise ValueError(
             f"{system.name} requires {len(system.sources)} source file(s), got {len(source_paths)}"
         )
-    if train_size <= 0 or test_size <= 0:
-        raise ValueError("train-size and test-size must be positive")
+    if train_size <= 0 or validation_size < 0 or test_size <= 0:
+        raise ValueError(
+            "train-size and test-size must be positive and validation-size cannot be negative"
+        )
     for path, source_definition in zip(source_paths, system.sources, strict=True):
         actual_hash = sha256(path)
         if actual_hash != source_definition.sha256:
@@ -122,24 +132,35 @@ def prepare(
                 f"got {coordinates.shape}"
             )
     available = sum(len(coordinates) for coordinates in coordinate_parts)
-    requested = train_size + test_size
+    requested = train_size + validation_size + test_size
     if requested > available:
         raise ValueError(f"requested {requested} samples from a dataset of {available}")
 
     if official_order is not None:
-        train_indices = official_order[:train_size]
-        test_indices = official_order[train_size:requested]
+        selection = official_order[:requested]
+    elif ordered:
+        selection = np.arange(requested, dtype=np.int64)
     else:
         selection = np.random.default_rng(seed).choice(available, size=requested, replace=False)
+    validation_end = train_size + validation_size
+    train_indices = selection[:train_size]
+    validation_indices = selection[train_size:validation_end]
+    test_indices = selection[validation_end:requested]
+    if official_order is None and not ordered:
         train_indices = np.sort(selection[:train_size])
-        test_indices = np.sort(selection[train_size:])
+        validation_indices = np.sort(selection[train_size:validation_end])
+        test_indices = np.sort(selection[validation_end:])
     # Sorted Lennard-Jones indices make selection from large memmaps mostly sequential.
-    train = reshape_and_center(
-        select_rows(coordinate_parts, train_indices), system.particles, system.dimensions
-    )
-    test = reshape_and_center(
-        select_rows(coordinate_parts, test_indices), system.particles, system.dimensions
-    )
+    split_indices = {"train": train_indices}
+    if validation_size:
+        split_indices["validation"] = validation_indices
+    split_indices["test"] = test_indices
+    splits = {
+        name: reshape_and_center(
+            select_rows(coordinate_parts, indices), system.particles, system.dimensions
+        )
+        for name, indices in split_indices.items()
+    }
     output.parent.mkdir(parents=True, exist_ok=True)
     metadata = json.dumps(
         {
@@ -155,10 +176,13 @@ def prepare(
                 for source in system.sources
             ],
             "seed": seed,
+            "ordered": ordered,
+            "split_sizes": {name: len(values) for name, values in splits.items()},
         }
     )
-    np.savez_compressed(output, train=train, test=test, metadata=np.array(metadata))
-    print(f"wrote {output}: train={train.shape}, test={test.shape}")
+    np.savez_compressed(output, **splits, metadata=np.array(metadata))
+    shapes = ", ".join(f"{name}={values.shape}" for name, values in splits.items())
+    print(f"wrote {output}: {shapes}")
 
 
 def main() -> None:
@@ -175,7 +199,16 @@ def main() -> None:
                 print(f"downloading {source_definition.url} to {source}")
                 download(source_definition.url, source)
             sources.append(source)
-    prepare(args.system, sources, output, args.train_size, args.test_size, args.seed)
+    prepare(
+        args.system,
+        sources,
+        output,
+        args.train_size,
+        args.test_size,
+        args.seed,
+        validation_size=args.validation_size,
+        ordered=args.ordered,
+    )
 
 
 if __name__ == "__main__":

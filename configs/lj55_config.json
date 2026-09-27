@@ -39,7 +39,7 @@
     "log_every": 1,
     "early_stopping_epsilon": 0.000001,
     "early_stopping_patience": 20,
-    "validation_holdout": 10000,
+    "validation_split": "validation",
     "validation_every": 6,
     "validation_generated_samples": 10000,
     "validation_batch_size": 64,
