@@ -106,6 +106,8 @@ class Drifting(nn.Module):
         references: torch.Tensor,
         self_indices: torch.Tensor | None = None,
         reference_weights: torch.Tensor | None = None,
+        *,
+        validate_self_indices: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return one density gradient and kernel mass per bandwidth."""
         self._validate_inputs(query, references)
@@ -118,7 +120,7 @@ class Drifting(nn.Module):
             if self_indices.device != query.device:
                 raise ValueError("self_indices must be on the query device")
             valid = self_indices >= 0
-            if torch.any(self_indices[valid] >= len(references)):
+            if validate_self_indices and torch.any(self_indices[valid] >= len(references)):
                 raise ValueError("self index is outside the reference bank")
             keep = torch.ones_like(squared_distance)
             rows = torch.arange(len(query), device=query.device)[valid]
@@ -194,10 +196,14 @@ class Drifting(nn.Module):
         )
         if negative_references is None:
             negative_references = generated
-        if self_indices is None and negative_references is generated:
+        generated_self_indices = self_indices is None and negative_references is generated
+        if generated_self_indices:
             self_indices = torch.arange(len(generated), device=generated.device)
         negative_fields, negative_masses = self._fields(
-            generated, negative_references, self_indices=self_indices
+            generated,
+            negative_references,
+            self_indices=self_indices,
+            validate_self_indices=not generated_self_indices,
         )
         positive_fields = self._normalize_fields(positive_fields, positive_masses)
         negative_fields = self._normalize_fields(negative_fields, negative_masses)

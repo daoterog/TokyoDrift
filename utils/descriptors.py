@@ -59,6 +59,8 @@ class DescriptorDrift(Drifting):
         references: torch.Tensor,
         self_indices: torch.Tensor | None = None,
         reference_weights: torch.Tensor | None = None,
+        *,
+        validate_self_indices: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute kernel fields without a [query, reference, descriptor] tensor."""
         self._validate_inputs(query, references)
@@ -76,7 +78,7 @@ class DescriptorDrift(Drifting):
             if self_indices.shape != (len(query),) or self_indices.device != query.device:
                 raise ValueError("self_indices must have one entry per query on its device")
             valid = self_indices >= 0
-            if torch.any(self_indices[valid] >= len(references)):
+            if validate_self_indices and torch.any(self_indices[valid] >= len(references)):
                 raise ValueError("self index is outside the reference bank")
             keep[torch.arange(len(query), device=query.device)[valid], self_indices[valid]] = 0
         if reference_weights is not None:

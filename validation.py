@@ -34,21 +34,35 @@ class ValidationEvaluator:
         coordinate_scale: float,
         training: dict,
         seed: int,
+        generation_source: ValidationEvaluator | None = None,
     ) -> ValidationEvaluator:
         """Create deterministic validation inputs without touching training RNG state."""
-        samples = int(training.get("validation_generated_samples", 10_000))
-        batch_size = int(training.get("validation_batch_size", 512))
         positive_references = int(training.get("validation_positive_references", 1024))
         reference_samples = int(training.get("validation_reference_samples", len(reference)))
-        if samples <= 0 or batch_size <= 0 or positive_references <= 0 or reference_samples <= 0:
+        if positive_references <= 0 or reference_samples <= 0:
             raise ValueError("validation sample and batch counts must be positive")
         if min(len(reference), reference_samples) < positive_references:
             raise ValueError("validation reference set is smaller than positive reference count")
         generator = torch.Generator().manual_seed(seed + 1_000_003)
-        coordinate_noise = coordinate_scale * torch.randn(
-            samples, system.particles, system.dimensions, generator=generator
-        )
-        feature_noise = torch.randn(samples, system.particles, feature_dim, generator=generator)
+        if generation_source is None:
+            samples = int(training.get("validation_generated_samples", 10_000))
+            batch_size = int(training.get("validation_batch_size", 512))
+            if samples <= 0 or batch_size <= 0:
+                raise ValueError("validation sample and batch counts must be positive")
+            coordinate_noise = coordinate_scale * torch.randn(
+                samples, system.particles, system.dimensions, generator=generator
+            )
+            feature_noise = torch.randn(samples, system.particles, feature_dim, generator=generator)
+        else:
+            expected_coordinates = (system.particles, system.dimensions)
+            expected_features = (system.particles, feature_dim)
+            if generation_source.coordinate_noise.shape[1:] != expected_coordinates:
+                raise ValueError("shared validation coordinate noise has the wrong shape")
+            if generation_source.feature_noise.shape[1:] != expected_features:
+                raise ValueError("shared validation feature noise has the wrong shape")
+            coordinate_noise = generation_source.coordinate_noise
+            feature_noise = generation_source.feature_noise
+            batch_size = generation_source.batch_size
         if len(reference) > reference_samples:
             reference_indices = torch.randperm(len(reference), generator=generator)[
                 :reference_samples
@@ -101,9 +115,7 @@ class ValidationEvaluator:
         field, _ = drift(
             drift_batch,
             self.drift_references.to(device),
-            drift_batch,
-            torch.arange(len(drift_batch), device=device),
-            self.repulsion,
+            repulsion=self.repulsion,
         )
         if self.system.name == "aldp":
             from data.alanine_dipeptide.metrics import validation_metrics

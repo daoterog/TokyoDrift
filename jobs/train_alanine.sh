@@ -36,7 +36,9 @@ if [[ ! -f "$CONFIG" ]]; then
     echo "training config does not exist: $CONFIG" >&2
     exit 1
 fi
-RUN_DIRECTORY="$REPOSITORY_ROOT/results/alanine_dipeptide/$RUN_ID"
+cd "$REPOSITORY_ROOT"
+RUN_NAME="$("$UV" run --no-sync python -m utils.result_naming --config "$CONFIG" --id "$RUN_ID")"
+RUN_DIRECTORY="$REPOSITORY_ROOT/results/alanine_dipeptide/$RUN_NAME"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"
 PARAMETERS="$CHECKPOINT_DIRECTORY/parameters.json"
@@ -45,7 +47,6 @@ if [[ -e "$RUN_DIRECTORY" ]]; then
     exit 1
 fi
 
-cd "$REPOSITORY_ROOT"
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-9}"
 "$UV" run --no-sync \
@@ -59,7 +60,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     fi
 fi
 exec > >(tee "$RUN_DIRECTORY/train_and_evaluate.log") 2>&1
-echo "run_id=$RUN_ID config=$CONFIG parameters=$PARAMETERS"
+echo "run_id=$RUN_ID run_name=$RUN_NAME config=$CONFIG parameters=$PARAMETERS"
 "$UV" run --no-sync python -m train --config "$CONFIG" "$@" \
     --device cuda --output "$CHECKPOINT_DIRECTORY"
 

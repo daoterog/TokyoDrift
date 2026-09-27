@@ -39,7 +39,7 @@ class SubmissionTests(unittest.TestCase):
                 env=environment,
                 cwd=root,
             )
-            snapshot = root / "submissions/dw4/queued-run/config.json"
+            snapshots = sorted((root / "submissions/dw4/queued-run").glob("*.json"))
             config.write_text(json.dumps({"value": "edited later"}))
             subprocess.run(
                 [script, "dw4", "--config", config, "--run-id", "second-run"],
@@ -49,13 +49,35 @@ class SubmissionTests(unittest.TestCase):
                 env=environment,
                 cwd=root,
             )
-            second_snapshot = root / "submissions/dw4/second-run/config.json"
+            second_snapshots = sorted((root / "submissions/dw4/second-run").glob("*.json"))
 
-            self.assertEqual(json.loads(snapshot.read_text()), {"value": "at submission"})
-            self.assertEqual(json.loads(second_snapshot.read_text()), {"value": "edited later"})
-            self.assertEqual(snapshot.stat().st_mode & 0o222, 0)
-            self.assertIn(f"CONFIG_SNAPSHOT={snapshot}", result.stdout)
-            self.assertIn("train_dw4.sh --seed 17", result.stdout)
+            self.assertEqual(
+                [path.stem for path in snapshots],
+                ["egnn_norm", "egnn_unnorm", "gnn_norm", "gnn_unnorm"],
+            )
+            combinations = {
+                (
+                    json.loads(path.read_text())["model"]["architecture"],
+                    json.loads(path.read_text())["drift"]["normalized"],
+                )
+                for path in snapshots
+            }
+            self.assertEqual(
+                combinations,
+                {("egnn", False), ("egnn", True), ("gnn", False), ("gnn", True)},
+            )
+            self.assertTrue(
+                all(json.loads(path.read_text())["value"] == "at submission" for path in snapshots)
+            )
+            self.assertTrue(
+                all(
+                    json.loads(path.read_text())["value"] == "edited later"
+                    for path in second_snapshots
+                )
+            )
+            self.assertTrue(all(path.stat().st_mode & 0o222 == 0 for path in snapshots))
+            self.assertEqual(result.stdout.count("CONFIG_SNAPSHOT="), 4)
+            self.assertEqual(result.stdout.count("train_dw4.sh --seed 17"), 4)
 
 
 if __name__ == "__main__":

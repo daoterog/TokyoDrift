@@ -359,16 +359,13 @@ def main() -> None:
     if type(track_train_validation) is not bool:
         raise ValueError("track_train_validation_metrics must be true or false")
     train_tracker = None
-    validation_tracker = None
     if track_train_validation:
-        if validation_data is None:
+        if validation_data is None or validator is None:
             raise ValueError(
                 "track_train_validation_metrics requires validation_split or validation_holdout"
             )
         tracking_config = {
             **training,
-            "validation_generated_samples": int(training.get("tracking_generated_samples", 10_000)),
-            "validation_batch_size": int(training.get("tracking_batch_size", 512)),
             "validation_positive_references": int(
                 training.get("tracking_positive_references", 1024)
             ),
@@ -382,14 +379,7 @@ def main() -> None:
             float(training["coordinate_noise_scale"]),
             tracking_config,
             tracking_seed,
-        )
-        validation_tracker = ValidationEvaluator.build(
-            validation_data,
-            system,
-            int(config["model"]["feature_dim"]),
-            float(training["coordinate_noise_scale"]),
-            tracking_config,
-            tracking_seed,
+            generation_source=validator,
         )
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -480,6 +470,8 @@ def main() -> None:
     drift = drift_class(
         initial_bandwidth, kernel=kernel, normalized=drift_definition["normalized"]
     ).to(device)
+    # Root mean square particle distance from the (centered) coordinate origin.
+    radius_definition = "root_mean_square_particle_distance_from_origin"
     reference_radius = float(train_data.square().sum(dim=-1).mean().sqrt())
     minimum_radius = reference_radius * float(training.get("min_radius_fraction", 0.0))
     reference_sampling = str(training.get("positive_reference_sampling", "shuffled"))
@@ -503,6 +495,7 @@ def main() -> None:
         "base_bandwidth": base_bandwidth,
         "initial_bandwidth": initial_bandwidth,
         "final_bandwidth": final_bandwidth,
+        "radius_definition": radius_definition,
         "reference_radius": reference_radius,
         "minimum_radius": minimum_radius,
         "ema_enabled": ema is not None,
@@ -556,6 +549,7 @@ def main() -> None:
                 )
                 if use_descriptors
                 else "particle_coordinates",
+                "radius_definition": radius_definition,
                 "reference_radius": reference_radius,
                 "minimum_radius": minimum_radius,
                 "ema_enabled": ema is not None,
@@ -589,29 +583,28 @@ def main() -> None:
         else:
             reference_batches = stratified_references.epoch_batches(reference_batch_size, generator)
 
-        epoch_totals: dict[str, float] = {}
-        for batch_index, reference_indices in enumerate(reference_batches, start=1):
+        epoch_totals: dict[str, torch.Tensor] = {}
+        epoch_minimum_radius: torch.Tensor | None = None
+        for reference_indices in reference_batches:
             positive = train_data[reference_indices].to(device)
             coordinate_noise = coordinate_scale * torch.randn(
                 batch_size, system.particles, system.dimensions, device=device
             )
             feature_noise = torch.randn(batch_size, system.particles, feature_dim, device=device)
             generated = model(coordinate_noise, feature_noise)
-            generated_radius = generated.detach().square().sum(dim=-1).mean().sqrt()
-            if minimum_radius and float(generated_radius) < minimum_radius:
-                raise RuntimeError(
-                    f"generator collapse detected at epoch {epoch}, batch {batch_index}: radius "
-                    f"{float(generated_radius):.6g} is below {minimum_radius:.6g}; "
-                    "do not continue this run"
-                )
-            field, drift_metrics = drift(
-                generated.detach(),
-                positive,
-                generated.detach(),
-                torch.arange(batch_size, device=device),
-                repulsion,
+            detached_generated = generated.detach()
+            generated_radius = detached_generated.square().sum(dim=-1).mean().sqrt()
+            epoch_minimum_radius = (
+                generated_radius
+                if epoch_minimum_radius is None
+                else torch.minimum(epoch_minimum_radius, generated_radius)
             )
-            target = (generated.detach() + eta * field).detach()
+            field, drift_metrics = drift(
+                detached_generated,
+                positive,
+                repulsion=repulsion,
+            )
+            target = detached_generated + eta * field
             loss = (generated - target).square().mean()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -624,18 +617,41 @@ def main() -> None:
             global_step += 1
 
             batch_metrics = {
-                "loss": float(loss.detach()),
-                "gradient_norm": float(gradient_norm.detach()),
-                "generated_radius": float(generated_radius),
-                **{name: float(value) for name, value in drift_metrics.items()},
+                "loss": loss.detach(),
+                "gradient_norm": gradient_norm.detach(),
+                "generated_radius": generated_radius,
+                **{name: value.detach() for name, value in drift_metrics.items()},
             }
             if system.energy is not None:
                 with torch.no_grad():
-                    batch_metrics["energy_mean"] = float(system.energy(generated).mean())
+                    batch_metrics["energy_mean"] = system.energy(detached_generated).mean()
             for name, value in batch_metrics.items():
-                epoch_totals[name] = epoch_totals.get(name, 0.0) + value
+                if name in epoch_totals:
+                    epoch_totals[name].add_(value)
+                else:
+                    epoch_totals[name] = value.clone()
 
-        epoch_loss = epoch_totals["loss"] / len(reference_batches)
+        if epoch_minimum_radius is None:
+            raise RuntimeError("training epoch unexpectedly contained no reference batches")
+        metric_names = list(epoch_totals)
+        # This is the training loop's only device-to-host synchronization per epoch.
+        epoch_summary = (
+            torch.stack(
+                [epoch_totals[name] / len(reference_batches) for name in metric_names]
+                + [epoch_minimum_radius]
+            )
+            .cpu()
+            .tolist()
+        )
+        epoch_metrics = dict(zip(metric_names, epoch_summary[:-1], strict=True))
+        minimum_generated_radius = epoch_summary[-1]
+        if minimum_radius and minimum_generated_radius < minimum_radius:
+            raise RuntimeError(
+                f"generator collapse detected at epoch {epoch}: minimum batch RMS radius "
+                f"{minimum_generated_radius:.6g} is below {minimum_radius:.6g}; "
+                "do not continue this run"
+            )
+        epoch_loss = epoch_metrics["loss"]
         should_stop = early_stopping.update(epoch_loss)
         final_epoch = should_stop or epoch == epochs
         if epoch == start_epoch or epoch % log_every == 0 or final_epoch:
@@ -643,7 +659,8 @@ def main() -> None:
                 "epoch": epoch,
                 "global_step": global_step,
                 "batches": len(reference_batches),
-                **{name: value / len(reference_batches) for name, value in epoch_totals.items()},
+                **epoch_metrics,
+                "minimum_batch_radius": minimum_generated_radius,
                 "bandwidth_scale": current_scale,
                 "bandwidth": current_bandwidth,
                 "learning_rate": current_learning_rate,
@@ -652,9 +669,16 @@ def main() -> None:
                 "epochs_without_improvement": early_stopping.epochs_without_improvement,
             }
             print(json.dumps(record))
-        if validator is not None and (epoch % validation_every == 0 or final_epoch):
+        validation_due = validator is not None and (epoch % validation_every == 0 or final_epoch)
+        tracking_due = train_tracker is not None and (epoch % tracking_every == 0 or final_epoch)
+        validation_samples = None
+        validation_metrics = None
+        if validator is not None and (validation_due or tracking_due):
             validation_model = ema if ema is not None else model
-            validation_metrics = validator.evaluate(validation_model, drift, device)
+            validation_samples = validator.generated_samples(validation_model, device)
+            validation_metrics = validator.evaluate_generated(validation_samples, drift, device)
+        if validation_due:
+            assert validation_metrics is not None
             validation_record = {
                 "epoch": epoch,
                 "global_step": global_step,
@@ -663,17 +687,11 @@ def main() -> None:
             print(json.dumps(validation_record))
             with (outdir / "validation.jsonl").open("a") as stream:
                 stream.write(json.dumps(validation_record) + "\n")
-        if (
-            train_tracker is not None
-            and validation_tracker is not None
-            and (epoch % tracking_every == 0 or final_epoch)
-        ):
-            tracking_model = ema if ema is not None else model
-            tracking_samples = train_tracker.generated_samples(tracking_model, device)
-            train_metrics = train_tracker.evaluate_generated(tracking_samples, drift, device)
-            validation_metrics = validation_tracker.evaluate_generated(
-                tracking_samples, drift, device
-            )
+        if tracking_due:
+            assert train_tracker is not None
+            assert validation_samples is not None
+            assert validation_metrics is not None
+            train_metrics = train_tracker.evaluate_generated(validation_samples, drift, device)
             tracking_record = {
                 "system": system.name,
                 "epoch": epoch,

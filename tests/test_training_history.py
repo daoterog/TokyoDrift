@@ -96,8 +96,6 @@ class TrainingHistoryPlotTests(unittest.TestCase):
                 "validation_positive_references": 2,
                 "track_train_validation_metrics": True,
                 "tracking_every": 1,
-                "tracking_generated_samples": 4,
-                "tracking_batch_size": 2,
                 "tracking_positive_references": 2,
             },
         }
@@ -129,7 +127,15 @@ class TrainingHistoryPlotTests(unittest.TestCase):
             ):
                 train_main()
             records = load_history(root / "run/train_validation_history.jsonl")
+            validation_records = [
+                json.loads(line)
+                for line in (root / "run/validation.jsonl").read_text().splitlines()
+            ]
             self.assertEqual([record["epoch"] for record in records], [1, 2])
+            self.assertEqual(
+                [record["validation"] for record in records],
+                [record["validation"] for record in validation_records],
+            )
             for record in records:
                 for split in ("train", "validation"):
                     self.assertGreaterEqual(record[split]["drift_loss"], 0)

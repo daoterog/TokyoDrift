@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Snapshot one training config and submit the matching Slurm job.
+# Snapshot one training config into four variants and submit their Slurm jobs.
 
 set -euo pipefail
 
@@ -7,9 +7,9 @@ usage() {
     cat <<'EOF'
 Usage: jobs/submit_training.sh SYSTEM [--config PATH] [--run-id ID] [-- TRAIN_ARGS...]
 
-SYSTEM may be dw4, lj13, lj55, or alanine_dipeptide. The selected config is copied to a
-run-specific, read-only snapshot before sbatch is called. Arguments after -- are forwarded to
-the training command when the job starts.
+SYSTEM may be dw4, lj13, lj55, or alanine_dipeptide. The selected config is expanded into four
+run-specific, read-only snapshots: EGNN/GNN crossed with normalized/unnormalized drifting. Each
+variant is submitted as a separate job. Arguments after -- are forwarded to every training command.
 EOF
 }
 
@@ -93,6 +93,18 @@ if ! python3 -m json.tool "$CONFIG" >/dev/null; then
     echo "config is not valid JSON: $CONFIG" >&2
     exit 1
 fi
+for argument in "${TRAIN_ARGS[@]}"; do
+    case "$argument" in
+        --normalized|--no-normalized|--normalized=*|--no-normalized=*)
+            echo "$argument conflicts with the four-run normalization matrix" >&2
+            exit 2
+            ;;
+        --config|--config=*)
+            echo "$argument cannot override the immutable config snapshot" >&2
+            exit 2
+            ;;
+    esac
+done
 if ! command -v "${SBATCH_BIN:-sbatch}" >/dev/null 2>&1; then
     echo "sbatch is unavailable" >&2
     exit 1
@@ -105,16 +117,20 @@ if ! mkdir "$SUBMISSION_DIRECTORY" 2>/dev/null; then
     echo "submission $RUN_ID already exists for $RESULT_SYSTEM; choose a different run id" >&2
     exit 1
 fi
-SNAPSHOT="$SUBMISSION_DIRECTORY/config.json"
-cp "$CONFIG" "$SNAPSHOT"
-chmod a-w "$SNAPSHOT"
-
 JOB_SCRIPT="$SCRIPT_DIR/$JOB_NAME"
 echo "run_id=$RUN_ID"
 echo "source_config=$CONFIG"
-echo "config_snapshot=$SNAPSHOT"
 cd "$REPOSITORY_ROOT"
-"${SBATCH_BIN:-sbatch}" \
-    "--export=ALL,RUN_ID=$RUN_ID,CONFIG_SNAPSHOT=$SNAPSHOT" \
-    "$JOB_SCRIPT" \
-    "${TRAIN_ARGS[@]}"
+python3 -m utils.training_matrix \
+    --config "$CONFIG" \
+    --output-directory "$SUBMISSION_DIRECTORY" >/dev/null
+
+for VARIANT in egnn_unnorm egnn_norm gnn_unnorm gnn_norm; do
+    SNAPSHOT="$SUBMISSION_DIRECTORY/$VARIANT.json"
+    chmod a-w "$SNAPSHOT"
+    echo "variant=$VARIANT config_snapshot=$SNAPSHOT"
+    "${SBATCH_BIN:-sbatch}" \
+        "--export=ALL,RUN_ID=$RUN_ID,CONFIG_SNAPSHOT=$SNAPSHOT" \
+        "$JOB_SCRIPT" \
+        "${TRAIN_ARGS[@]}"
+done

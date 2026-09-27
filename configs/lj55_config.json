@@ -46,8 +46,6 @@
     "validation_positive_references": 512,
     "track_train_validation_metrics": true,
     "tracking_every": 6,
-    "tracking_generated_samples": 10000,
-    "tracking_batch_size": 64,
     "tracking_positive_references": 512,
     "tracking_reference_samples": 10000
   }
