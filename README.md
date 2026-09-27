@@ -85,6 +85,22 @@ development and comparison targets.
 
 ## Train
 
+For Slurm runs, use the submission wrapper so every queued job receives an immutable snapshot of
+the config as it existed at submission time:
+
+```bash
+jobs/submit_training.sh dw4
+jobs/submit_training.sh lj13 --run-id experiment-17
+jobs/submit_training.sh lj55 --config configs/lj55_config.json -- --seed 17
+```
+
+Snapshots are stored under `results/submitted-configs/` and copied to the eventual run directory
+as `submitted_config.json`. Editing a config after submission therefore does not affect queued
+jobs. Arguments after `--` are stored by Slurm and forwarded to the training command. Every
+training job evaluates its selected checkpoint with 500,000 generated samples.
+
+For an immediate local run, invoke the training module directly:
+
 ```bash
 uv run --no-sync python -m train --config configs/dw4_config.json \
   --output results/dw4/example-run/checkpoints

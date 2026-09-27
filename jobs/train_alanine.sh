@@ -31,7 +31,11 @@ else
 fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
-CONFIG="$REPOSITORY_ROOT/configs/alanine_dipeptide_config.json"
+CONFIG="${CONFIG_SNAPSHOT:-$REPOSITORY_ROOT/configs/alanine_dipeptide_config.json}"
+if [[ ! -f "$CONFIG" ]]; then
+    echo "training config does not exist: $CONFIG" >&2
+    exit 1
+fi
 RUN_DIRECTORY="$REPOSITORY_ROOT/results/alanine_dipeptide/$RUN_ID"
 CHECKPOINT_DIRECTORY="$RUN_DIRECTORY/checkpoints"
 FINAL_CHECKPOINT="$CHECKPOINT_DIRECTORY/final.pt"
@@ -47,6 +51,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-9}"
 "$UV" run --no-sync \
     python -c 'import h5py, openmm; from pathlib import Path; assert Path("data/alanine_dipeptide/dataset.npz").is_file(), "Run jobs/download_alanine.sh first"'
 mkdir -p "$CHECKPOINT_DIRECTORY"
+cp "$CONFIG" "$RUN_DIRECTORY/submitted_config.json"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     SLURM_OUTPUT="$REPOSITORY_ROOT/train-aldp-$SLURM_JOB_ID.out"
     if [[ -e "$SLURM_OUTPUT" ]]; then

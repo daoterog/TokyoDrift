@@ -32,7 +32,11 @@ else
 fi
 
 RUN_ID="${RUN_ID:-${SLURM_JOB_ID:-manual-$(date +%Y%m%d-%H%M%S)}}"
-CONFIG="$REPOSITORY_ROOT/configs/lj55_config.json"
+CONFIG="${CONFIG_SNAPSHOT:-$REPOSITORY_ROOT/configs/lj55_config.json}"
+if [[ ! -f "$CONFIG" ]]; then
+    echo "training config does not exist: $CONFIG" >&2
+    exit 1
+fi
 cd "$REPOSITORY_ROOT"
 RUN_NAME="$("$UV" run --no-sync python -m utils.result_naming --config "$CONFIG" --id "$RUN_ID")"
 RUN_DIRECTORY="$REPOSITORY_ROOT/results/lj55/$RUN_NAME"
@@ -45,6 +49,7 @@ if [[ -e "$RUN_DIRECTORY" ]]; then
     exit 1
 fi
 mkdir -p "$CHECKPOINT_DIRECTORY"
+cp "$CONFIG" "$RUN_DIRECTORY/submitted_config.json"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     SLURM_OUTPUT="$REPOSITORY_ROOT/train-lj55-$SLURM_JOB_ID.out"
     if [[ -e "$SLURM_OUTPUT" ]]; then
