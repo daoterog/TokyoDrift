@@ -44,7 +44,7 @@
     "validation_generated_samples": 10000,
     "validation_batch_size": 64,
     "validation_positive_references": 512,
-    "track_train_test_metrics": true,
+    "track_train_validation_metrics": true,
     "tracking_every": 6,
     "tracking_generated_samples": 10000,
     "tracking_batch_size": 64,

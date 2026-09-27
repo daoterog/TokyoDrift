@@ -63,8 +63,9 @@ Platform helpers and compute-node jobs live in `jobs/`.
 
 ## Prepare data
 
-Prepare the main benchmarks independently. Each command writes a deterministic train/test archive
-to its own dataset folder:
+Prepare the main benchmarks independently. Each command writes deterministic train, validation,
+and test splits to its own dataset folder. DW4, LJ13, and LJ55 all use the same default split sizes:
+100,000 training, 400,000 validation, and 500,000 test configurations.
 
 ```bash
 uv run --no-sync python -m data.prepare dw4
@@ -159,9 +160,9 @@ with an unnormalized descriptor EGNN is stored in `123_egnn_unnorm_descr/`.
 Training writes a single `checkpoints/final.pt` at the configured epoch limit or when mean epoch
 training loss fails to improve by more than `early_stopping_epsilon` for
 `early_stopping_patience` consecutive epochs. Validation remains diagnostic and does not select
-a checkpoint. The particle jobs also record fixed-sample train/test drift loss and energy
+a checkpoint. The particle jobs also record fixed-sample train/validation drift loss and energy
 Wasserstein distance at each configured tracking interval in
-`checkpoints/train_test_history.jsonl`.
+`checkpoints/train_validation_history.jsonl`. The test split is read only by the final evaluator.
 
 ```text
 results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/
@@ -170,8 +171,8 @@ results/<dataset>/<run-id>_<architecture>_<norm|unnorm>_<descr|nodescr>/
 ├── distributions.png          # particle benchmarks
 ├── energy_all_samples.png     # particle benchmarks
 ├── energy_valid_samples.png   # particle benchmarks
-├── loss_over_epochs.png       # periodic particle train/test drift loss
-├── energy_wasserstein_over_epochs.png # periodic particle train/test distance
+├── loss_over_epochs.png       # periodic particle train/validation drift loss
+├── energy_wasserstein_over_epochs.png # periodic particle train/validation distance
 ├── ramachandran.png           # alanine
 ├── free_energy.png            # alanine
 ├── slurm.out                  # scheduler output when submitted with Slurm

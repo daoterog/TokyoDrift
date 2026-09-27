@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ import torch
 from data.prepare import select_rows
 from data.systems import center, dw4_energy, get_system, lj_energy
 from drifting import Drifting, median_bandwidth
+from evaluate import arguments as evaluation_arguments
 from evaluate import (
     histogram_js,
     metric_observations,
@@ -32,6 +34,14 @@ from utils.io import build_model
 
 
 class PotentialTests(unittest.TestCase):
+    def test_particle_evaluation_defaults_to_seed_42(self) -> None:
+        with patch(
+            "sys.argv",
+            ["evaluate", "--checkpoint", "checkpoint.pt", "--output", "evaluation"],
+        ):
+            args = evaluation_arguments()
+        self.assertEqual(args.seed, 42)
+
     def test_dw_pair_at_minimum(self) -> None:
         positions = torch.tensor([[[0.0, 0.0], [4.0, 0.0]]])
         self.assertTrue(torch.allclose(dw4_energy(positions), torch.tensor([0.0])))
@@ -101,11 +111,20 @@ class PotentialTests(unittest.TestCase):
         self.assertEqual(first.numel(), 1_000)
         self.assertTrue(torch.equal(first, second))
 
-    def test_bounded_wasserstein_preserves_a_constant_shift(self) -> None:
+    def test_exact_wasserstein_preserves_a_constant_shift(self) -> None:
         left = torch.arange(10_000, dtype=torch.float32)
         right = left + 2.0
-        distance = wasserstein_1(left, right, points=128, max_observations=1_000)
+        distance = wasserstein_1(left, right, max_observations=1_000)
         self.assertAlmostEqual(distance, 2.0)
+
+    def test_exact_wasserstein_gives_an_extreme_its_empirical_mass(self) -> None:
+        reference = torch.zeros(10_000)
+        generated = reference.clone()
+        generated[-1] = 1_000_000
+        self.assertEqual(wasserstein_1(generated, reference), 100.0)
+
+    def test_exact_wasserstein_supports_unequal_population_sizes(self) -> None:
+        self.assertEqual(wasserstein_1(torch.tensor([0.0, 2.0]), torch.tensor([0.0])), 1.0)
 
     def test_energy_histogram_js_keeps_extreme_tail_mass(self) -> None:
         reference = torch.linspace(-220, -180, 1_000)

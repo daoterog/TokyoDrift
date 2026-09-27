@@ -181,7 +181,7 @@ def main() -> None:
     )
     parser.add_argument("--energy-platform", choices=("Reference", "CPU"), default="Reference")
     parser.add_argument("--save-samples", action="store_true")
-    parser.add_argument("--seed", type=int, default=2023)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
     if min(args.num_samples, args.batch_size, args.energy_samples, args.metric_sample_size) <= 0:

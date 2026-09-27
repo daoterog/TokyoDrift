@@ -85,13 +85,13 @@ if [[ ! -s "$FINAL_CHECKPOINT" ]]; then
 fi
 echo "selected_checkpoint=$FINAL_CHECKPOINT"
 
-TRAIN_TEST_HISTORY="$CHECKPOINT_DIRECTORY/train_test_history.jsonl"
-if [[ ! -s "$TRAIN_TEST_HISTORY" ]]; then
-    echo "training completed without train/test history at $TRAIN_TEST_HISTORY" >&2
+TRAIN_VALIDATION_HISTORY="$CHECKPOINT_DIRECTORY/train_validation_history.jsonl"
+if [[ ! -s "$TRAIN_VALIDATION_HISTORY" ]]; then
+    echo "training completed without train/validation history at $TRAIN_VALIDATION_HISTORY" >&2
     exit 1
 fi
 "$UV" run --no-sync python -m plot_training_history \
-    --history "$TRAIN_TEST_HISTORY" \
+    --history "$TRAIN_VALIDATION_HISTORY" \
     --output "$RUN_DIRECTORY"
 
 "$UV" run --no-sync python -m evaluate \

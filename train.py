@@ -328,6 +328,7 @@ def main() -> None:
     if validation_split and validation_holdout:
         raise ValueError("choose either a validation split or a training holdout")
     validator = None
+    validation_data = None
     if validation_holdout or validation_split:
         if validation_split:
             if validation_split != "validation":
@@ -350,15 +351,20 @@ def main() -> None:
             training,
             seed,
         )
-    track_train_test = training.get("track_train_test_metrics", False)
-    if type(track_train_test) is not bool:
-        raise ValueError("track_train_test_metrics must be true or false")
+    if "track_train_test_metrics" in training:
+        raise ValueError(
+            "track_train_test_metrics has been replaced by track_train_validation_metrics"
+        )
+    track_train_validation = training.get("track_train_validation_metrics", False)
+    if type(track_train_validation) is not bool:
+        raise ValueError("track_train_validation_metrics must be true or false")
     train_tracker = None
-    test_tracker = None
-    if track_train_test:
-        test_data, test_metadata = load_dataset(Path(config["data"]), "test")
-        if test_metadata["system"] != system.name:
-            raise ValueError("test dataset system differs")
+    validation_tracker = None
+    if track_train_validation:
+        if validation_data is None:
+            raise ValueError(
+                "track_train_validation_metrics requires validation_split or validation_holdout"
+            )
         tracking_config = {
             **training,
             "validation_generated_samples": int(training.get("tracking_generated_samples", 10_000)),
@@ -377,8 +383,8 @@ def main() -> None:
             tracking_config,
             tracking_seed,
         )
-        test_tracker = ValidationEvaluator.build(
-            test_data,
+        validation_tracker = ValidationEvaluator.build(
+            validation_data,
             system,
             int(config["model"]["feature_dim"]),
             float(training["coordinate_noise_scale"]),
@@ -531,7 +537,7 @@ def main() -> None:
     tracking_every = int(training.get("tracking_every", log_every))
     if validator is not None and validation_every <= 0:
         raise ValueError("validation_every must be positive")
-    if track_train_test and tracking_every <= 0:
+    if track_train_validation and tracking_every <= 0:
         raise ValueError("tracking_every must be positive")
     print(
         json.dumps(
@@ -659,22 +665,24 @@ def main() -> None:
                 stream.write(json.dumps(validation_record) + "\n")
         if (
             train_tracker is not None
-            and test_tracker is not None
+            and validation_tracker is not None
             and (epoch % tracking_every == 0 or final_epoch)
         ):
             tracking_model = ema if ema is not None else model
             tracking_samples = train_tracker.generated_samples(tracking_model, device)
             train_metrics = train_tracker.evaluate_generated(tracking_samples, drift, device)
-            test_metrics = test_tracker.evaluate_generated(tracking_samples, drift, device)
+            validation_metrics = validation_tracker.evaluate_generated(
+                tracking_samples, drift, device
+            )
             tracking_record = {
                 "system": system.name,
                 "epoch": epoch,
                 "global_step": global_step,
                 "train": train_metrics,
-                "test": test_metrics,
+                "validation": validation_metrics,
             }
-            print(json.dumps({"train_test_tracking": tracking_record}))
-            with (outdir / "train_test_history.jsonl").open("a") as stream:
+            print(json.dumps({"train_validation_tracking": tracking_record}))
+            with (outdir / "train_validation_history.jsonl").open("a") as stream:
                 stream.write(json.dumps(tracking_record) + "\n")
         if final_epoch:
             save_checkpoint(

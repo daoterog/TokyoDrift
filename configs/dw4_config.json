@@ -3,20 +3,20 @@
   "drift": {
     "space": "particle_coordinates",
     "kernel": "gaussian",
-    "normalized": true,
+    "normalized": false,
     "descriptors": true
   },
   "data": "data/dw4/dataset.npz",
   "output": "results/dw4/checkpoints",
   "seed": 42,
   "model": {
-    "architecture": "gnn",
+    "architecture": "egnn",
     "variant": "bounded",
     "coordinate_range": 1.0,
     "feature_dim": 8,
     "hidden_dim": 128,
     "layers": 6,
-    "radial_basis": 21,
+    "radial_basis": 24,
     "max_distance": 8.0
   },
   "training": {
@@ -47,7 +47,7 @@
     "validation_generated_samples": 10000,
     "validation_batch_size": 512,
     "validation_positive_references": 1024,
-    "track_train_test_metrics": true,
+    "track_train_validation_metrics": true,
     "tracking_every": 20,
     "tracking_generated_samples": 10000,
     "tracking_batch_size": 512,

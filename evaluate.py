@@ -26,7 +26,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--num-samples", type=int, default=500_000)
     parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--seed", type=int, default=2023)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--save-samples", action="store_true")
     parser.add_argument(
@@ -137,16 +137,27 @@ def minimum_pair_distances(
 def wasserstein_1(
     left: torch.Tensor,
     right: torch.Tensor,
-    points: int = 4096,
     max_observations: int = DEFAULT_METRIC_SAMPLE_SIZE,
 ) -> float | None:
-    """Estimate scalar Wasserstein-1 distance from matched empirical quantiles."""
+    """Return the exact scalar empirical Wasserstein-1 distance after bounded sampling."""
     left = metric_observations(left, max_observations)
     right = metric_observations(right, max_observations)
     if left.numel() == 0 or right.numel() == 0:
         return None
-    quantiles = torch.linspace(0.0, 1.0, min(points, left.numel(), right.numel()))
-    return float((torch.quantile(left, quantiles) - torch.quantile(right, quantiles)).abs().mean())
+    left = left.double().sort().values
+    right = right.double().sort().values
+    if left.numel() == right.numel():
+        return float((left - right).abs().mean())
+
+    # Integrate the absolute difference between the two empirical CDFs. Unlike
+    # a fixed quantile grid, this gives every extreme observation its true
+    # empirical mass even when the population sizes differ.
+    support = torch.cat((left, right)).sort().values
+    interval_starts = support[:-1].contiguous()
+    widths = support[1:] - interval_starts
+    left_cdf = torch.searchsorted(left, interval_starts, right=True).double() / len(left)
+    right_cdf = torch.searchsorted(right, interval_starts, right=True).double() / len(right)
+    return float(((left_cdf - right_cdf).abs() * widths).sum())
 
 
 def histogram_js(
@@ -733,8 +744,12 @@ def main() -> None:
         "evaluated_weights": evaluated_weights,
         "num_generated_samples": args.num_samples,
         "num_test_samples": len(reference),
+        "generation": {
+            "seed": args.seed,
+            "batch_size": args.batch_size,
+        },
         "metric_estimation": {
-            "quantile_points": 4096,
+            "wasserstein_1": "exact empirical CDF integral after bounded sampling",
             "maximum_observations_per_distribution": args.metric_sample_size,
             "large_scalar_observation_sampling": "deterministic uniform with replacement",
             "pair_distance_sampling": (

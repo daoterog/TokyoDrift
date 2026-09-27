@@ -1,4 +1,4 @@
-"""Plot periodic train/test metrics recorded during particle training."""
+"""Plot periodic train/validation metrics recorded during particle training."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from pathlib import Path
 
 def arguments() -> argparse.Namespace:
     """Parse history plotting arguments."""
-    parser = argparse.ArgumentParser(description="Plot train/test metrics over epochs.")
+    parser = argparse.ArgumentParser(description="Plot train/validation metrics over epochs.")
     parser.add_argument("--history", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
 
 def load_history(path: Path) -> list[dict]:
-    """Load and validate newline-delimited train/test metric records."""
+    """Load and validate newline-delimited train/validation metric records."""
     records = []
     with path.open() as stream:
         for line_number, line in enumerate(stream, start=1):
@@ -28,7 +28,7 @@ def load_history(path: Path) -> list[dict]:
             record = json.loads(line)
             try:
                 int(record["epoch"])
-                for split in ("train", "test"):
+                for split in ("train", "validation"):
                     float(record[split]["drift_loss"])
                     float(record[split]["energy_wasserstein_1"])
             except (KeyError, TypeError, ValueError) as error:
@@ -61,12 +61,14 @@ def plot_history(records: list[dict], output: Path) -> None:
     system = systems.pop()
 
     figure, axis = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
-    for split, label in (("train", "Train"), ("test", "Test")):
+    for split, label in (("train", "Train"), ("validation", "Validation")):
         values = [float(record[split]["drift_loss"]) for record in records]
         axis.plot(epochs, values, marker="o", markersize=3, label=label)
     axis.set(xlabel="Epoch", ylabel="Drift loss", title=f"{system} loss over training")
     if all(
-        float(record[split]["drift_loss"]) > 0 for record in records for split in ("train", "test")
+        float(record[split]["drift_loss"]) > 0
+        for record in records
+        for split in ("train", "validation")
     ):
         axis.set_yscale("log")
     axis.grid(alpha=0.25)
@@ -75,7 +77,7 @@ def plot_history(records: list[dict], output: Path) -> None:
     plt.close(figure)
 
     figure, axis = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
-    for split, label in (("train", "Train"), ("test", "Test")):
+    for split, label in (("train", "Train"), ("validation", "Validation")):
         values = [float(record[split]["energy_wasserstein_1"]) for record in records]
         axis.plot(epochs, values, marker="o", markersize=3, label=label)
     axis.set(

@@ -28,8 +28,8 @@ def arguments() -> argparse.Namespace:
         help="Use existing official NPY file(s), in the published part order.",
     )
     parser.add_argument("--train-size", type=int, default=100_000)
-    parser.add_argument("--validation-size", type=int, default=0)
-    parser.add_argument("--test-size", type=int, default=100_000)
+    parser.add_argument("--validation-size", type=int, default=400_000)
+    parser.add_argument("--test-size", type=int, default=500_000)
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument(
         "--ordered",

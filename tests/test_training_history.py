@@ -13,7 +13,7 @@ from train import main as train_main
 
 
 class TrainingHistoryPlotTests(unittest.TestCase):
-    def record(self, epoch, train_loss, test_loss, train_wasserstein, test_wasserstein):
+    def record(self, epoch, train_loss, validation_loss, train_wasserstein, validation_wasserstein):
         return {
             "epoch": epoch,
             "global_step": epoch * 10,
@@ -21,9 +21,9 @@ class TrainingHistoryPlotTests(unittest.TestCase):
                 "drift_loss": train_loss,
                 "energy_wasserstein_1": train_wasserstein,
             },
-            "test": {
-                "drift_loss": test_loss,
-                "energy_wasserstein_1": test_wasserstein,
+            "validation": {
+                "drift_loss": validation_loss,
+                "energy_wasserstein_1": validation_wasserstein,
             },
         }
 
@@ -55,7 +55,7 @@ class TrainingHistoryPlotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "strictly increasing"):
                 load_history(history)
 
-    def test_training_records_fixed_train_and_test_metrics(self):
+    def test_training_records_fixed_train_and_validation_metrics(self):
         config = {
             "system": "dw4",
             "drift": {
@@ -89,7 +89,12 @@ class TrainingHistoryPlotTests(unittest.TestCase):
                 "log_every": 1,
                 "early_stopping_epsilon": 1e-6,
                 "early_stopping_patience": 20,
-                "track_train_test_metrics": True,
+                "validation_split": "validation",
+                "validation_every": 1,
+                "validation_generated_samples": 4,
+                "validation_batch_size": 2,
+                "validation_positive_references": 2,
+                "track_train_validation_metrics": True,
                 "tracking_every": 1,
                 "tracking_generated_samples": 4,
                 "tracking_batch_size": 2,
@@ -97,10 +102,12 @@ class TrainingHistoryPlotTests(unittest.TestCase):
             },
         }
         train = torch.randn(6, 4, 2)
-        test = torch.randn(5, 4, 2)
+        validation = torch.randn(5, 4, 2)
 
         def load(_path, split):
-            return (test if split == "test" else train), {"system": "dw4"}
+            if split == "test":
+                self.fail("training must not inspect the test split")
+            return (validation if split == "validation" else train), {"system": "dw4"}
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -121,10 +128,10 @@ class TrainingHistoryPlotTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 train_main()
-            records = load_history(root / "run/train_test_history.jsonl")
+            records = load_history(root / "run/train_validation_history.jsonl")
             self.assertEqual([record["epoch"] for record in records], [1, 2])
             for record in records:
-                for split in ("train", "test"):
+                for split in ("train", "validation"):
                     self.assertGreaterEqual(record[split]["drift_loss"], 0)
                     self.assertGreaterEqual(record[split]["energy_wasserstein_1"], 0)
 

@@ -127,7 +127,7 @@ class NormalizedDriftTests(unittest.TestCase):
             positive_references=2,
             validation_holdout=0,
             validation_split=None,
-            track_train_test_metrics=False,
+            track_train_validation_metrics=False,
         )
         samples = torch.randn(3, 55, 3)
         with tempfile.TemporaryDirectory() as directory:
