@@ -15,7 +15,19 @@ class SubmissionTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / "config.json"
-            config.write_text(json.dumps({"value": "at submission"}))
+            base_config = {
+                "value": "at submission",
+                "system": "dw4",
+                "model": {
+                    "architecture": "egnn",
+                    "variant": "bounded",
+                    "feature_dim": 8,
+                    "hidden_dim": 64,
+                    "layers": 4,
+                    "radial_basis": 16,
+                },
+            }
+            config.write_text(json.dumps(base_config))
             environment = {
                 **os.environ,
                 "SBATCH_BIN": "/bin/echo",
@@ -40,7 +52,7 @@ class SubmissionTests(unittest.TestCase):
                 cwd=root,
             )
             snapshots = sorted((root / "submissions/dw4/queued-run").glob("*.json"))
-            config.write_text(json.dumps({"value": "edited later"}))
+            config.write_text(json.dumps({**base_config, "value": "edited later"}))
             subprocess.run(
                 [script, "dw4", "--config", config, "--run-id", "second-run"],
                 check=True,

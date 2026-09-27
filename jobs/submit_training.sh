@@ -123,7 +123,7 @@ echo "source_config=$CONFIG"
 cd "$REPOSITORY_ROOT"
 python3 -m utils.training_matrix \
     --config "$CONFIG" \
-    --output-directory "$SUBMISSION_DIRECTORY" >/dev/null
+    --output-directory "$SUBMISSION_DIRECTORY"
 
 for VARIANT in egnn_unnorm egnn_norm gnn_unnorm gnn_norm; do
     SNAPSHOT="$SUBMISSION_DIRECTORY/$VARIANT.json"

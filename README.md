@@ -100,6 +100,11 @@ Snapshots are stored under `results/submitted-configs/<system>/<run-id>/` and co
 eventual run directories as `submitted_config.json`. Editing a config after submission therefore
 does not affect queued jobs. Arguments after `--` are stored by Slurm and forwarded to all four
 training commands; normalization overrides are rejected because they conflict with the matrix.
+The supplied model settings define the EGNN reference capacity. For the GNN snapshots, submission
+keeps `hidden_dim` and `layers` fixed, then directly reduces `radial_basis` by 3 for DW4 (2D)
+or by 6 for LJ13, LJ55, and alanine (3D). This compensates for the GNN's additional coordinate
+weights. The generated snapshot counts and resolved widths are printed before the jobs are
+submitted.
 Every training job evaluates its selected checkpoint with 500,000 generated samples.
 
 For an immediate local run, invoke the training module directly:
