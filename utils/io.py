@@ -11,7 +11,11 @@ import numpy as np
 import torch
 
 from data.systems import center, get_system
-from models import EGNN, GNN
+from models import EGNN, GNN, LegacyEGNN
+
+# "block" is the reference EGNN; "legacy" and "bounded" build the radial-basis
+# LegacyEGNN that earlier checkpoints were trained with.
+EGNN_VARIANTS = ("block", "legacy", "bounded")
 
 
 def _mps_available() -> bool:
@@ -54,13 +58,24 @@ def resolve_model_definition(config: dict[str, Any]) -> dict[str, Any]:
         # Missing means legacy so checkpoints written before the bounded EGNN
         # variant retain the parameter shapes they were trained with.
         variant = str(model.get("variant", "legacy"))
-        if variant not in {"legacy", "bounded"}:
-            raise ValueError("model.variant must be 'legacy' or 'bounded'")
-        coordinate_range = float(model.get("coordinate_range", 1.0))
+        if variant not in EGNN_VARIANTS:
+            raise ValueError(f"model.variant must be one of {EGNN_VARIANTS}")
+        coordinate_range = float(model.get("coordinate_range", 15.0 if variant == "block" else 1.0))
         if not math.isfinite(coordinate_range) or coordinate_range <= 0:
             raise ValueError("model.coordinate_range must be finite and positive")
         model["variant"] = variant
         model["coordinate_range"] = coordinate_range
+        if variant == "block":
+            layers_per_block = int(model.get("layers_per_block", 1))
+            if layers_per_block <= 0:
+                raise ValueError("model.layers_per_block must be positive")
+            aggregation = str(model.get("aggregation", "sum"))
+            if aggregation not in {"sum", "mean"}:
+                raise ValueError("model.aggregation must be 'sum' or 'mean'")
+            model["layers_per_block"] = layers_per_block
+            model["attention"] = bool(model.get("attention", True))
+            model["tanh_coordinate_updates"] = bool(model.get("tanh_coordinate_updates", True))
+            model["aggregation"] = aggregation
     return model
 
 
@@ -76,17 +91,29 @@ def build_model(config: dict[str, Any]) -> torch.nn.Module:
         feature_dim=int(model["feature_dim"]),
         hidden_dim=int(model["hidden_dim"]),
         layers=int(model["layers"]),
-        radial_basis=int(model["radial_basis"]),
-        max_distance=float(model["max_distance"]),
         fixed_atom_identity=(system.particles if model.get("fixed_atom_identity", False) else None),
     )
-    if model["architecture"] == "egnn":
+    if model["architecture"] == "egnn" and model["variant"] == "block":
         return EGNN(
             **common_arguments,
+            layers_per_block=int(model["layers_per_block"]),
+            attention=bool(model["attention"]),
+            tanh_coordinate_updates=bool(model["tanh_coordinate_updates"]),
+            coordinate_range=float(model["coordinate_range"]),
+            aggregation=str(model["aggregation"]),
+        )
+    radial_arguments = dict(
+        radial_basis=int(model["radial_basis"]),
+        max_distance=float(model["max_distance"]),
+    )
+    if model["architecture"] == "egnn":
+        return LegacyEGNN(
+            **common_arguments,
+            **radial_arguments,
             variant=str(model["variant"]),
             coordinate_range=float(model["coordinate_range"]),
         )
-    return GNN(dimensions=system.dimensions, **common_arguments)
+    return GNN(dimensions=system.dimensions, **common_arguments, **radial_arguments)
 
 
 def select_device(requested: str) -> torch.device:

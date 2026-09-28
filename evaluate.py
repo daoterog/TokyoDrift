@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -688,6 +689,9 @@ def main() -> None:
     ema_state = checkpoint.get("ema")
     model.load_state_dict(ema_state if ema_state is not None else checkpoint["model"])
     evaluated_weights = "ema" if ema_state is not None else "model"
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    sampling_started = time.perf_counter()
     generated, endpoint_distance = generate(
         model,
         system.name,
@@ -697,6 +701,9 @@ def main() -> None:
         int(config["model"]["feature_dim"]),
         device,
     )
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    sampling_seconds = time.perf_counter() - sampling_started
     if system.name in {"dw4", "lj13"} and not args.skip_kde_nll:
         training_reference, training_metadata = load_dataset(data_path, "train")
         if training_metadata["system"] != system.name:
@@ -747,6 +754,9 @@ def main() -> None:
         "generation": {
             "seed": args.seed,
             "batch_size": args.batch_size,
+            "elapsed_seconds": sampling_seconds,
+            "seconds_per_sample": sampling_seconds / args.num_samples,
+            "samples_per_second": args.num_samples / sampling_seconds,
         },
         "metric_estimation": {
             "wasserstein_1": "exact empirical CDF integral after bounded sampling",

@@ -14,6 +14,7 @@ from drifting import Drifting
 from train import main as train_main
 from train import resolve_drift_definition
 from utils.descriptors import DescriptorDrift, particle_descriptors
+from utils.training_matrix import training_variants
 
 
 class NormalizedDriftTests(unittest.TestCase):
@@ -118,7 +119,7 @@ class NormalizedDriftTests(unittest.TestCase):
     def test_lj55_gnn_training_override_checkpoint_and_resume(self):
         config_path = Path(__file__).resolve().parents[1] / "configs/lj55_config.json"
         config = json.loads(config_path.read_text())
-        config["model"]["architecture"] = "gnn"
+        config["model"] = dict(training_variants(config))["gnn_unnorm"]["model"]
         original_model = config["model"].copy()
         # Exercise the real LJ55 architecture with a tiny synthetic reference split.
         config["training"].update(

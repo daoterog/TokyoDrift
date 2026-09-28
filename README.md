@@ -123,11 +123,20 @@ neural network whose coordinate updates are not constrained to be E(n)-equivaria
 also support scalar, `"auto"`, or multi-scale bandwidths; Gaussian or Laplacian kernels; optional
 invariant sorted-pair-distance descriptors; and optional local kernel-mass normalization.
 
-Checked-in EGNN configs use `model.variant: "bounded"`. This variant keeps the local radial basis,
-adds transformed initial and current squared-distance edge features, and uses bounded relative
-directions for coordinate updates. `model.coordinate_range` scales the maximum mean coordinate
-message per layer. Configs without a variant resolve to `"legacy"` so existing checkpoints retain
-their original parameter shapes and behavior.
+Checked-in EGNN configs use `model.variant: "block"` ([models/egnn.py](models/egnn.py)). Each of
+the `model.layers` blocks applies `model.layers_per_block` feature message-passing sublayers
+(optional sigmoid attention, residual update) and then one coordinate update. Edge attributes are
+the initial and current squared distances; coordinate messages are
+`(x_j - x_i) / (|x_j - x_i| + 1)` times a learned weight bounded by
+`tanh(·) * model.coordinate_range` (default 15) and are combined with `model.aggregation`
+(`"sum"` by default, or `"mean"`). The block EGNN has no radial basis; `model.max_distance` is used
+only by the derived GNN baseline, whose `radial_basis` the training matrix chooses to match the
+EGNN parameter count.
+
+The `"legacy"` and `"bounded"` variants build the earlier radial-basis EGNN
+([models/egnn_legacy.py](models/egnn_legacy.py)) and require `model.radial_basis`. Configs without
+a variant resolve to `"legacy"` so existing checkpoints retain their original parameter shapes and
+behavior.
 
 With descriptor drift, the comparison is invariant to translations, rotations, reflections, and
 permutations of identical particles. The sorted distance representation is not a complete

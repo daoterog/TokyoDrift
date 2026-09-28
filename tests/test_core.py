@@ -22,7 +22,7 @@ from evaluate import (
     validity_metrics,
     wasserstein_1,
 )
-from models import EGNN, GNN, EGNNLayer
+from models import EGNN, GNN, LegacyEGNN, LegacyEGNNLayer
 from train import (
     EnergyStratifiedReferenceSampler,
     bandwidth_scale,
@@ -369,27 +369,72 @@ class BandwidthScheduleTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
-    def test_egnn_is_permutation_and_rotation_equivariant(self) -> None:
-        for variant in ("legacy", "bounded"):
+    def test_egnn_is_permutation_and_orthogonal_equivariant(self) -> None:
+        models = {
+            "block": lambda: EGNN(feature_dim=3, hidden_dim=16, layers=3, layers_per_block=2),
+            "block_mean": lambda: EGNN(
+                feature_dim=3, hidden_dim=16, layers=3, attention=False, aggregation="mean"
+            ),
+            "legacy": lambda: LegacyEGNN(
+                feature_dim=3, hidden_dim=16, layers=3, radial_basis=6, variant="legacy"
+            ),
+            "bounded": lambda: LegacyEGNN(
+                feature_dim=3, hidden_dim=16, layers=3, radial_basis=6, variant="bounded"
+            ),
+        }
+        for variant, factory in models.items():
             with self.subTest(variant=variant):
                 torch.manual_seed(4)
-                model = EGNN(
-                    feature_dim=3,
-                    hidden_dim=16,
-                    layers=2,
-                    radial_basis=6,
-                    variant=variant,
+                model = factory().double()
+                # Freshly initialized coordinate heads barely move particles, which
+                # would make any map look equivariant; perturb every weight first.
+                with torch.no_grad():
+                    for parameter in model.parameters():
+                        parameter.add_(0.3 * torch.randn_like(parameter))
+                positions = center(torch.randn(2, 5, 3, dtype=torch.float64))
+                features = torch.randn(2, 5, 3, dtype=torch.float64)
+                orthogonal, _ = torch.linalg.qr(torch.randn(3, 3, dtype=torch.float64))
+                if torch.det(orthogonal) > 0:
+                    orthogonal[:, 0] *= -1
+                permutation = torch.tensor([2, 0, 4, 3, 1])
+                output = model(positions, features)
+                self.assertGreater(float((output - positions).abs().max()), 1e-2)
+                torch.testing.assert_close(output.mean(dim=1), torch.zeros(2, 3, dtype=torch.float64))
+                transformed = model(
+                    positions[:, permutation] @ orthogonal.T + 3.0, features[:, permutation]
                 )
-                positions = center(torch.randn(2, 4, 2))
-                features = torch.randn(2, 4, 3)
-                permutation = torch.tensor([2, 0, 3, 1])
-                rotation = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-                expected = model(positions, features)[:, permutation] @ rotation.T
-                actual = model(positions[:, permutation] @ rotation.T, features[:, permutation])
-                self.assertTrue(torch.allclose(actual, expected, atol=2e-5, rtol=2e-5))
+                torch.testing.assert_close(transformed, output[:, permutation] @ orthogonal.T)
+
+    def test_block_egnn_follows_reference_layout(self) -> None:
+        model = EGNN(feature_dim=3, hidden_dim=8, layers=2, layers_per_block=3)
+        self.assertEqual(len(model.blocks), 2)
+        self.assertEqual(len(model.blocks[0].type_update), 3)
+        coordinate_output = model.blocks[0].coord_update.coord_mlp[-1]
+        self.assertIsNone(coordinate_output.bias)
+        self.assertLess(float(coordinate_output.weight.detach().abs().max()), 1e-2)
+        self.assertEqual(model.blocks[0].type_update[0].message_mlp[0].in_features, 2 * 8 + 2)
+
+    def test_block_egnn_bounds_each_coordinate_message(self) -> None:
+        model = EGNN(feature_dim=3, hidden_dim=4, layers=1, coordinate_range=0.5)
+        with torch.no_grad():
+            model.blocks[0].coord_update.coord_mlp[-1].weight.fill_(1e3)
+        positions = center(torch.randn(1, 4, 3) * 1e3)
+        displacement = model(positions, torch.randn(1, 4, 3)) - positions
+        # Summing three unit-bounded messages moves a particle at most 3 * 0.5;
+        # recentering can add at most the same amount again.
+        self.assertLessEqual(float(displacement.norm(dim=-1).max().detach()), 2 * 3 * 0.5)
+        self.assertTrue(torch.isfinite(displacement).all())
+
+    def test_block_egnn_gradients_are_finite_with_coincident_particles(self) -> None:
+        model = EGNN(feature_dim=3, hidden_dim=4, layers=2)
+        positions = torch.zeros(1, 3, 2, requires_grad=True)
+        model(positions, torch.randn(1, 3, 3)).square().sum().backward()
+        self.assertTrue(torch.isfinite(positions.grad).all())
+        for parameter in model.parameters():
+            self.assertTrue(torch.isfinite(parameter.grad).all())
 
     def test_bounded_egnn_coordinate_update_does_not_scale_with_distance(self) -> None:
-        layer = EGNNLayer(
+        layer = LegacyEGNNLayer(
             hidden_dim=4,
             radial_basis=4,
             variant="bounded",
@@ -440,14 +485,14 @@ class ModelTests(unittest.TestCase):
             "radial_basis": 4,
             "max_distance": 8,
         }
-        for architecture, expected_type in (("egnn", EGNN), ("gnn", GNN)):
+        for architecture, expected_type in (("egnn", LegacyEGNN), ("gnn", GNN)):
             with self.subTest(architecture=architecture):
                 config = {
                     "system": "dw4",
                     "model": {**definition, "architecture": architecture},
                 }
                 self.assertIsInstance(build_model(config), expected_type)
-        self.assertIsInstance(build_model({"system": "dw4", "model": definition}), EGNN)
+        self.assertIsInstance(build_model({"system": "dw4", "model": definition}), LegacyEGNN)
         bounded = build_model(
             {
                 "system": "dw4",
@@ -459,8 +504,29 @@ class ModelTests(unittest.TestCase):
                 },
             }
         )
+        self.assertIsInstance(bounded, LegacyEGNN)
         self.assertEqual(bounded.variant, "bounded")
         self.assertEqual(bounded.coordinate_range, 0.5)
+        block = build_model(
+            {
+                "system": "dw4",
+                "model": {
+                    "architecture": "egnn",
+                    "variant": "block",
+                    "feature_dim": 3,
+                    "hidden_dim": 8,
+                    "layers": 2,
+                    "aggregation": "mean",
+                },
+            }
+        )
+        self.assertIsInstance(block, EGNN)
+        self.assertEqual(block.coordinate_range, 15.0)
+        self.assertEqual(block.aggregation, "mean")
+        with self.assertRaisesRegex(ValueError, "model.variant"):
+            build_model(
+                {"system": "dw4", "model": {**definition, "architecture": "egnn", "variant": "x"}}
+            )
         with self.assertRaisesRegex(ValueError, "model.architecture"):
             build_model(
                 {

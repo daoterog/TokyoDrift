@@ -23,6 +23,25 @@ SYSTEM_DIMENSIONS = {
 }
 
 
+EGNN_ONLY_KEYS = (
+    "variant",
+    "coordinate_range",
+    "layers_per_block",
+    "attention",
+    "tanh_coordinate_updates",
+    "aggregation",
+)
+
+
+def _system_dimensions(config: dict) -> int:
+    try:
+        return SYSTEM_DIMENSIONS[str(config["system"]).lower()]
+    except KeyError as error:
+        raise ValueError(
+            f"cannot count GNN parameters for unknown system {config.get('system')!r}"
+        ) from error
+
+
 def trainable_parameter_count(config: dict) -> int:
     """Return the analytical trainable-parameter count for a configured model."""
     model = config["model"]
@@ -30,24 +49,31 @@ def trainable_parameter_count(config: dict) -> int:
     hidden_dim = int(model["hidden_dim"])
     feature_dim = int(model["feature_dim"])
     layers = int(model["layers"])
-    radial_basis = int(model["radial_basis"])
-    if hidden_dim <= 0 or feature_dim <= 0 or layers <= 0 or radial_basis <= 0:
-        raise ValueError("model dimensions, layers, and radial_basis must be positive")
+    if hidden_dim <= 0 or feature_dim <= 0 or layers <= 0:
+        raise ValueError("model dimensions and layers must be positive")
+    variant = str(model.get("variant", "legacy")) if architecture == "egnn" else None
 
+    if variant == "block":
+        layers_per_block = int(model.get("layers_per_block", 1))
+        if layers_per_block <= 0:
+            raise ValueError("model.layers_per_block must be positive")
+        attention = (hidden_dim + 1) if bool(model.get("attention", True)) else 0
+        type_gcn = 9 * hidden_dim**2 + 15 * hidden_dim + 6 + attention
+        pos_gcn = 3 * hidden_dim**2 + 5 * hidden_dim
+        embedding = feature_dim * hidden_dim + hidden_dim
+        return embedding + layers * (layers_per_block * type_gcn + pos_gcn)
+
+    radial_basis = int(model["radial_basis"])
+    if radial_basis <= 0:
+        raise ValueError("model.radial_basis must be positive")
     embedding = hidden_dim**2 + feature_dim * hidden_dim + 2 * hidden_dim
     if architecture == "egnn":
-        variant = str(model.get("variant", "legacy"))
         if variant not in {"legacy", "bounded"}:
-            raise ValueError("model.variant must be 'legacy' or 'bounded'")
+            raise ValueError("model.variant must be 'block', 'legacy' or 'bounded'")
         distance_features = 2 if variant == "bounded" else 0
         per_layer = 10 * hidden_dim**2 + (radial_basis + 10 + distance_features) * hidden_dim + 2
     elif architecture == "gnn":
-        try:
-            dimensions = SYSTEM_DIMENSIONS[str(config["system"]).lower()]
-        except KeyError as error:
-            raise ValueError(
-                f"cannot count GNN parameters for unknown system {config.get('system')!r}"
-            ) from error
+        dimensions = _system_dimensions(config)
         per_layer = (
             10 * hidden_dim**2 + (radial_basis + 3 * dimensions + 9) * hidden_dim + dimensions + 1
         )
@@ -57,25 +83,26 @@ def trainable_parameter_count(config: dict) -> int:
 
 
 def _matched_gnn_model(config: dict) -> dict:
-    """Return a GNN model with its RBF width adjusted to the EGNN count."""
+    """Return a GNN model whose RBF width best matches the EGNN parameter count."""
     reference = copy.deepcopy(config)
     reference.setdefault("model", {})["architecture"] = "egnn"
-    model = copy.deepcopy(reference["model"])
+    target = trainable_parameter_count(reference)
+    model = {
+        key: value for key, value in reference["model"].items() if key not in EGNN_ONLY_KEYS
+    }
     model["architecture"] = "gnn"
-    try:
-        dimensions = SYSTEM_DIMENSIONS[str(config["system"]).lower()]
-    except KeyError as error:
+    # GNN parameters grow by layers * hidden_dim per radial channel.
+    model["radial_basis"] = 1
+    base = trainable_parameter_count({**config, "model": model}) - int(model["layers"]) * int(
+        model["hidden_dim"]
+    )
+    radial_basis = round((target - base) / (int(model["layers"]) * int(model["hidden_dim"])))
+    if radial_basis <= 0:
         raise ValueError(
-            f"cannot match GNN parameters for unknown system {config.get('system')!r}"
-        ) from error
-    distance_features = 2 if str(model.get("variant", "legacy")) == "bounded" else 0
-    radial_reduction = 3 * dimensions - 1 - distance_features
-    model["radial_basis"] = int(model["radial_basis"]) - radial_reduction
-    if model["radial_basis"] <= 0:
-        raise ValueError(
-            "EGNN radial_basis is too small to create a parameter-matched GNN: "
-            f"it must exceed {radial_reduction}"
+            "EGNN has too few parameters to create a parameter-matched GNN: "
+            f"the matched GNN would need {radial_basis} radial channels"
         )
+    model["radial_basis"] = radial_basis
     return model
 
 
@@ -126,7 +153,7 @@ def main() -> None:
             f"trainable_parameters={trainable_parameter_count(variant)} "
             f"hidden_dim={variant['model']['hidden_dim']} "
             f"layers={variant['model']['layers']} "
-            f"radial_basis={variant['model']['radial_basis']}"
+            f"radial_basis={variant['model'].get('radial_basis', 'none')}"
         )
 
 
